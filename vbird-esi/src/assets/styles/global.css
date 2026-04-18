@@ -1,0 +1,222 @@
+/**
+ * Vbird ESI — 全局 CSS 主题系统 (v3.0 — Light Theme)
+ *
+ * 设计原则：
+ * - 明亮、干净的工业级 UI
+ * - 灰白系背景 + 深色文字，对比度 ≥ 4.5:1
+ * - 8dp 间距节奏系统
+ * - 克制的蓝色主色调
+ */
+
+/* ========================
+   CSS Variables — 设计令牌
+   ======================== */
+:root {
+  /* 字体 */
+  --font-family: 'Segoe UI', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+
+  /* 颜色 — 主色（沉稳蓝） */
+  --color-primary: hsl(217, 72%, 50%);
+  --color-primary-light: hsl(217, 72%, 58%);
+  --color-primary-dark: hsl(217, 72%, 40%);
+  --color-primary-bg: hsla(217, 72%, 50%, 0.07);
+
+  /* 颜色 — 语义色 */
+  --color-success: hsl(152, 56%, 40%);
+  --color-warning: hsl(38, 92%, 48%);
+  --color-danger: hsl(0, 72%, 51%);
+  --color-info: hsl(235, 55%, 55%);
+
+  /* 颜色 — 表格四色（ESI 业务核心）*/
+  /* ⚠️ 以下为 Excel 导出使用的纯色参考值，UI 展示使用下方的半透明淡化版本 */
+  --cell-red: #ff0000;
+  --cell-red-text: #ffffff;
+  --cell-yellow: #ffff00;
+  --cell-yellow-text: #000000;
+  --cell-green: #92d050;
+  --cell-green-text: #000000;
+  --cell-purple: #7030a0;
+  --cell-purple-text: #ffffff;
+
+  /* BUG-6: UI 展示用半透明版本（与 Excel 导出的纯色区分），供 InspectionTable 等组件引用 */
+  --cell-red-ui: rgba(239, 68, 68, 0.08);
+  --cell-yellow-ui: rgba(234, 179, 8, 0.08);
+  --cell-green-ui: rgba(34, 197, 94, 0.06);
+  --cell-purple-ui: rgba(168, 85, 247, 0.08);
+
+  /* 颜色 — 中性面板色 (明亮主题) */
+  --bg-root: hsl(220, 14%, 96%);
+  --bg-app: hsl(220, 14%, 96%);
+  --bg-sidebar: hsl(220, 16%, 99%);
+  --bg-card: hsl(0, 0%, 100%);
+  --bg-card-hover: hsl(220, 14%, 97%);
+  --bg-input: hsl(0, 0%, 100%);
+  --bg-elevated: hsl(220, 14%, 94%);
+  --bg-page: hsl(220, 14%, 96%);    /* SegmentLayoutEditor 切割条/空状态背景 */
+
+  --border-color: hsl(220, 13%, 89%);
+  --border-color-light: hsl(220, 13%, 84%);
+  --border-color-focus: var(--color-primary);
+
+  /* 文字 — 4 级层次（深色文字 on 浅色背景） */
+  --text-primary: hsl(220, 20%, 18%);
+  --text-secondary: hsl(220, 10%, 46%);
+  --text-tertiary: hsl(220, 8%, 62%);
+  --text-inverse: hsl(0, 0%, 100%);
+
+  /* 阴影 — 轻柔 */
+  --shadow-sm: 0 1px 3px hsla(220, 20%, 20%, 0.06);
+  --shadow-md: 0 4px 12px hsla(220, 20%, 20%, 0.08);
+  --shadow-lg: 0 8px 24px hsla(220, 20%, 20%, 0.12);
+  --shadow-glow: 0 0 0 1px var(--color-primary), 0 0 8px hsla(217, 72%, 50%, 0.12);
+
+  /* 圆角 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  /* 间距 — 4/8dp 节奏 */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* 布局 */
+  --sidebar-width: 200px;
+  --sidebar-collapsed-width: 56px;
+  --header-height: 48px;
+
+  /* 过渡 */
+  --transition-fast: 0.12s ease-out;
+  --transition-normal: 0.2s ease-out;
+  --transition-slow: 0.35s ease-out;
+}
+
+/* ========================
+   全局重置
+   ======================== */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  background: var(--bg-root);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+/* 滚动条 — 轻柔 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsla(220, 10%, 50%, 0.2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: hsla(220, 10%, 50%, 0.35); }
+
+/* 可编辑区域允许选择 */
+input, textarea, select, [contenteditable="true"], .editable {
+  user-select: text;
+}
+
+/* ========================
+   通用工具类
+   ======================== */
+.flex-center { display: flex; align-items: center; justify-content: center; }
+.flex-between { display: flex; align-items: center; justify-content: space-between; }
+.text-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 淡入 — 快速 */
+.fade-enter-active { transition: opacity 0.18s ease-out; }
+.fade-leave-active { transition: opacity 0.12s ease-in; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* 滑入 */
+.slide-enter-active { transition: all 0.2s ease-out; }
+.slide-leave-active { transition: all 0.14s ease-in; }
+.slide-enter-from { opacity: 0; transform: translateY(6px); }
+.slide-leave-to { opacity: 0; transform: translateY(-4px); }
+
+/* ========================
+   Element Plus 明亮覆盖（防止暗色残留）
+   ======================== */
+:root {
+  --el-bg-color: #ffffff;
+  --el-bg-color-overlay: #ffffff;
+  --el-bg-color-page: var(--bg-root);
+  --el-text-color-primary: var(--text-primary);
+  --el-text-color-regular: var(--text-secondary);
+  --el-text-color-secondary: var(--text-tertiary);
+  --el-text-color-placeholder: var(--text-tertiary);
+  --el-border-color: var(--border-color);
+  --el-border-color-light: var(--border-color);
+  --el-border-color-lighter: var(--border-color);
+  --el-fill-color-blank: #ffffff;
+  --el-fill-color-light: hsl(220, 14%, 96%);
+  --el-fill-color: hsl(220, 14%, 94%);
+  --el-fill-color-dark: hsl(220, 14%, 90%);
+  --el-mask-color: rgba(0, 0, 0, 0.5);
+  --el-color-primary: var(--color-primary);
+}
+
+.el-menu { border-right: none !important; }
+.el-card { --el-card-bg-color: var(--bg-card); --el-card-border-color: var(--border-color); }
+.el-button--primary { --el-button-bg-color: var(--color-primary); --el-button-border-color: var(--color-primary); }
+
+/* 对话框 — 确保白色背景 */
+.el-dialog { background: #ffffff !important; color: var(--text-primary) !important; }
+.el-dialog__header { color: var(--text-primary) !important; }
+.el-dialog__body { color: var(--text-primary) !important; }
+
+/* 对话框标题下渐变线 */
+.el-dialog__header::after {
+  content: '';
+  display: block;
+  height: 1px;
+  margin-top: 12px;
+  background: linear-gradient(90deg, var(--color-primary) 0%, transparent 60%);
+  opacity: 0.25;
+}
+
+/* 输入框 — 白色背景 */
+.el-input__wrapper { border-radius: var(--radius-md) !important; background-color: #ffffff !important; }
+.el-input__inner { color: var(--text-primary) !important; }
+.el-textarea__inner { background: #ffffff !important; color: var(--text-primary) !important; }
+
+/* 选择框 — 下拉白色 */
+.el-select-dropdown { background: #ffffff !important; }
+.el-select-dropdown__item { color: var(--text-primary) !important; }
+
+/* 表格 */
+.el-table { --el-table-bg-color: #ffffff; --el-table-tr-bg-color: #ffffff; --el-table-header-bg-color: hsl(220, 14%, 96%); --el-table-text-color: var(--text-primary); }
+
+/* 弹出层 — popover / tooltip */
+.el-popper.is-light { background: #ffffff !important; color: var(--text-primary) !important; }
+
+/* Tag */
+.el-tag { --el-tag-bg-color: hsl(220, 14%, 94%); --el-tag-text-color: var(--text-secondary); }
+
+/* Message Box */
+.el-message-box { background: #ffffff !important; color: var(--text-primary) !important; }
+.el-message-box__title { color: var(--text-primary) !important; }
+.el-message-box__content { color: var(--text-secondary) !important; }
+
+/* Overlay — 暗色遮罩保持（正确） */
+.el-overlay { background-color: rgba(0, 0, 0, 0.5) !important; }
+
