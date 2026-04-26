@@ -5,3 +5,4 @@
 export * from './cell'
 export * from './template'
 export * from './project'
+export * from './device'

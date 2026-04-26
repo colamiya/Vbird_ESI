@@ -1,45 +1,9 @@
 import type { InspectionTableData } from '@/types/project'
 import type { L1Template } from '@/types/template'
+import { L1_PRINT_LAYOUT } from '@/config/excelLayout'
 import { computeSegments } from '@/utils/segmentLayout'
 
-const L1_PAGE_MARGINS_CM = {
-  top: 1.91,
-  bottom: 1.91,
-  left: 1.78,
-  right: 1.78,
-  header: 0.76,
-  footer: 0.76,
-} as const
-
-export const L1_PRINT_LAYOUT = {
-  paperSize: 9,
-  orientation: 'portrait' as const,
-  pageOrder: 'overThenDown' as const,
-  scale: 100,
-  fitToPage: false,
-  a4WidthCm: 21,
-  a4HeightCm: 29.7,
-  marginsCm: L1_PAGE_MARGINS_CM,
-  paginationSafetyReservePt: 8,
-  maxLocPerSeg: 6,
-  seqColW: 5,
-  itemColW: 10,
-  reqColW: 15,
-  locColWWithSum: 8,
-  locColWNoSum: 10,
-  summaryColW: 10,
-  titleRowH: 20,
-  headerRow1H: 22,
-  headerRow2H: 22,
-  dataRowH: 18,
-  faultRowH: 20,
-  passRateRowH: 18,
-  notesRowH: 20,
-  pageGapPt: 5,
-  dataFontSize: 9,
-  rowHeightPaddingPt: 4,
-  textCellPaddingPx: 6,
-} as const
+export { L1_PRINT_LAYOUT } from '@/config/excelLayout'
 
 export const L1_WORKSHEET_PAGE_SETUP = {
   paperSize: L1_PRINT_LAYOUT.paperSize,
@@ -389,10 +353,13 @@ export function getL1PageBlockSpec(hasSummaryCol: boolean): L1PageBlockSpec {
     (L1_PRINT_LAYOUT.maxLocPerSeg * excelWidthToPixels(locColW)) +
     (hasSummaryCol ? excelWidthToPixels(summaryColW) : 0)
   const remainingWidthPx = Math.max(0, printableWidthPx - fixedWidthPx)
-  const ratioTotal = 2 + 3 + 5
-  const seqColW = pixelsToExcelWidth(remainingWidthPx * (2 / ratioTotal))
-  const itemColW = pixelsToExcelWidth(remainingWidthPx * (3 / ratioTotal))
-  const reqColW = pixelsToExcelWidth(remainingWidthPx * (5 / ratioTotal))
+  const seqRatio = L1_PRINT_LAYOUT.fixedColumnRatio.seq
+  const itemRatio = L1_PRINT_LAYOUT.fixedColumnRatio.item
+  const reqRatio = L1_PRINT_LAYOUT.fixedColumnRatio.req
+  const ratioTotal = seqRatio + itemRatio + reqRatio
+  const seqColW = pixelsToExcelWidth(remainingWidthPx * (seqRatio / ratioTotal))
+  const itemColW = pixelsToExcelWidth(remainingWidthPx * (itemRatio / ratioTotal))
+  const reqColW = pixelsToExcelWidth(remainingWidthPx * (reqRatio / ratioTotal))
 
   return {
     colCount,

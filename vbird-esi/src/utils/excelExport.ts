@@ -7,28 +7,31 @@
  * 第一个 Sheet 是 L3 检查结果计算表
  *
  * ========================
- * LAYOUT_CONFIG — 集中调参区（开发者微调入口）
- * 修改此处的参数后重新导出即可，无需查找散落的魔法数字
+ * Excel 版式参数集中在 src/config/excelLayout.ts。
+ * 修改配置后重新导出即可，无需查找散落的魔法数字。
  * ========================
  *
  * 自动切割规则：
  * - 每段最多 6 个地点
  * - 优先上下排列，超 A4 高度则左右换列
  * - 所有 gridRow 排数对齐（占位表填充）
- * - 仅全局最后一段有汇总列
+ * - 仅全局最后一段有单项检测结果汇总列
  */
 
 import ExcelJS from 'exceljs'
 import { invoke } from '@tauri-apps/api/core'
 import { save } from '@tauri-apps/plugin-dialog'
-import type { Project, ProjectSubdivision, InspectionTableData } from '@/types/project'
+import { EXCEL_LAYOUT_CONFIG as LAYOUT_CONFIG } from '@/config/excelLayout'
+import type { Project, ProjectLocationItem, ProjectSubdivision, InspectionTableData } from '@/types/project'
+import type { DeviceItem } from '@/types/device'
 import type { L1Template, L2Template, DeductionItem } from '@/types/template'
 import { isEffectiveValue, isPassed } from '@/utils/numericRule'
 import {
+  buildDeviceListRows,
+  buildProjectCalcPreview,
   calcTotalPassRate,
-  countValidCheckpoints,
-  countFaults,
   calcSubdivisionScore,
+  getDisplayL1Name,
 } from '@/utils/projectCalc'
 import {
   buildL1PrintPages,
@@ -39,80 +42,7 @@ import {
   pxToPoints,
 } from '@/utils/l1PrintLayout'
 
-// ============================================================
-// 🔧 LAYOUT_CONFIG — 所有可微调参数集中在此处
-// ============================================================
-const LAYOUT_CONFIG = {
-  font: {
-    name: '宋体',
-    headerSize: 10,
-    dataSize: 9,
-    l1HeaderSize: 10,
-    l2TitleSize: 18,
-    l2CompanySize: 12,
-    l3TitleSize: 36,
-    coverSize: 36,
-  },
-
-  l1: {
-    seqColW: L1_PRINT_LAYOUT.seqColW,
-    itemColW: L1_PRINT_LAYOUT.itemColW,
-    reqColW: L1_PRINT_LAYOUT.reqColW,
-    locColW_WithSum: L1_PRINT_LAYOUT.locColWWithSum,
-    locColW_NoSum: L1_PRINT_LAYOUT.locColWNoSum,
-    summaryColW: L1_PRINT_LAYOUT.summaryColW,
-    titleRowH: L1_PRINT_LAYOUT.titleRowH,
-    headerRow1H: L1_PRINT_LAYOUT.headerRow1H,
-    headerRow2H: L1_PRINT_LAYOUT.headerRow2H,
-    dataRowH: L1_PRINT_LAYOUT.dataRowH,
-    faultRowH: L1_PRINT_LAYOUT.faultRowH,
-    passRateRowH: L1_PRINT_LAYOUT.passRateRowH,
-    notesRowH: L1_PRINT_LAYOUT.notesRowH,
-    pageGap: L1_PRINT_LAYOUT.pageGapPt,
-    maxLocPerSeg: L1_PRINT_LAYOUT.maxLocPerSeg,
-  },
-
-  l2: {
-    colWidths: [11.63, 14.75, 7.25, 14.13, 8.25, 8.25, 7.38, 11.88],
-    rowH: {
-      company: 20,
-      title: 30,
-      info: 30,
-      subInfo: 27.6,
-      tableHeader: 27.6,
-      dataRow: 20,
-      scoring: 20,
-    },
-    dataStartRow: 7,
-    scoringBlankRows: 8,
-  },
-
-  l3: {
-    colWidths: [10.63, 35.63, 10.63, 10.63, 14.41, 14.41],
-    titleMergeRows: 8,
-    subNameBgArgb: 'FFFFC000',
-    tableHeaderRow: 9,
-  },
-
-  cover: {
-    textRow: 20,
-    textStartCol: 1,
-    textEndCol: 10,
-  },
-
-  colors: {
-    calcBg: 'FFE8E8E8',
-    white: 'FFFFFFFF',
-    black: 'FF000000',
-    subNameBg: 'FFFFC000',
-  },
-
-  borders: {
-    all: 'thin' as ExcelJS.BorderStyle,
-    headerBottom: 'medium' as ExcelJS.BorderStyle,
-    thick: 'medium' as ExcelJS.BorderStyle,
-  },
-} as const
+// Excel 列宽、页边距、缩放、行高和比例统一配置在 src/config/excelLayout.ts。
 
 // ============================================================
 // 主导出函数
@@ -122,6 +52,7 @@ export async function exportProjectToExcel(
   project: Project,
   l1Templates: L1Template[],
   l2Templates: L2Template[],
+  deviceItems: DeviceItem[] = [],
 ): Promise<boolean> {
   const filePath = await save({
     title: '导出 Excel',
@@ -135,6 +66,9 @@ export async function exportProjectToExcel(
   workbook.created = new Date()
 
   buildL3Sheet(workbook, project, l1Templates)
+  buildLocationListSheet(workbook, project)
+  buildResultListSheet(workbook, project, l1Templates)
+  buildDeviceListSheet(workbook, project, l1Templates, deviceItems)
 
   project.subdivisions.forEach((sub, subIdx) => {
     const l2 = l2Templates.find(t => t.id === sub.l2TemplateId)
@@ -173,7 +107,7 @@ export async function exportProjectToExcel(
  * - 先按真实打印区高度做逻辑分页
  * - 再把各逻辑页作为横向页块渲染到同一张 Sheet
  * - 同位次表格共享同一组行号与备注行高，缺失位次用占位表补齐
- * - 仅最后一页显示汇总列（非末段仍以 `/` 占位）
+ * - 最后一页预留末列；仅全局最后块显示单项检测结果汇总列，非末块仍作为点位/占位列
  */
 function buildL1Sheet(
   workbook: ExcelJS.Workbook,
@@ -251,9 +185,9 @@ function setL1ColWidths(
 }
 
 /**
- * 写入 L1 段主体（双行表头 + 数据行 + 故障行 + 合格率行 + 备注行）
+ * 写入 L1 段主体（双行表头 + 数据行 + 故障行 + 设备完好率行 + 备注行）
  *
- * @param isLastSeg 是否为全局最后一段——只有最后一段才输出汇总列和合格率/备注行
+ * @param isLastSeg 是否为全局最后一段——只有最后一段才输出单项检测结果汇总和真实设备完好率/备注
  * @returns 下一个可用行号
  */
 function writeL1SegmentBody(
@@ -282,6 +216,7 @@ function writeL1SegmentBody(
   const bdr = LAYOUT_CONFIG.borders
   const allCpIndices = Array.from({ length: data.checkpoints.length }, (_, i) => i)
   const segmentEndCol = hasSummaryCol ? summaryCol : (dc + cfg.maxLocPerSeg - 1)
+  const finalSummaryCol = hasSummaryCol && isLastEffectiveSeg
 
   const titleCell = sheet.getCell(r, sc)
   titleCell.value = `设施名称：${template.facilityName || template.name}`
@@ -307,13 +242,13 @@ function writeL1SegmentBody(
   setCell(sheet, r, ic,  '检查项目',   true, fnt.l1HeaderSize, 'center')
   setCell(sheet, r, rc,  '技术要求',   true, fnt.l1HeaderSize, 'center')
   setCell(sheet, r, dc, '测试点单项结果', true, fnt.l1HeaderSize, 'center')
-  sheet.mergeCells(r, dc, r, dc + cfg.maxLocPerSeg - 1)
-  if (hasSummaryCol) setCell(sheet, r, summaryCol, '汇总列', true, fnt.l1HeaderSize, 'center')
+  sheet.mergeCells(r, dc, r, finalSummaryCol ? dc + cfg.maxLocPerSeg - 1 : segmentEndCol)
+  if (finalSummaryCol) setCell(sheet, r, summaryCol, '单项检测结果汇总', true, fnt.l1HeaderSize, 'center')
 
   sheet.mergeCells(r, sc, r + 1, sc)
   sheet.mergeCells(r, ic, r + 1, ic)
   sheet.mergeCells(r, rc, r + 1, rc)
-  if (hasSummaryCol) sheet.mergeCells(r, summaryCol, r + 1, summaryCol)
+  if (finalSummaryCol) sheet.mergeCells(r, summaryCol, r + 1, summaryCol)
   sheet.getRow(r).height = cfg.headerRow1H
   r++
 
@@ -330,7 +265,19 @@ function writeL1SegmentBody(
     }
   }
 
-  ;[sc, ic, rc].concat(hasSummaryCol ? [summaryCol] : []).forEach(c => {
+  if (hasSummaryCol && !finalSummaryCol) {
+    const cell = sheet.getCell(r, summaryCol)
+    cell.value = '/'
+    applyL1Cell(cell, false, fnt.dataSize, 'center')
+    cell.border = {
+      top: { style: bdr.all },
+      bottom: { style: bdr.headerBottom },
+      left: { style: bdr.all },
+      right: { style: bdr.all },
+    }
+  }
+
+  ;[sc, ic, rc].concat(finalSummaryCol ? [summaryCol] : []).forEach(c => {
     const cell = sheet.getCell(r, c)
     if (!cell.font) applyL1Cell(cell, true, fnt.l1HeaderSize, 'center')
     cell.border = {
@@ -406,10 +353,10 @@ function writeL1SegmentBody(
     r++
   }
 
-  setCell(sheet, r, rc, '合格率', false, fnt.dataSize, 'center')
-  setCell(sheet, r, dc, '合格率', false, fnt.dataSize, 'center')
-  sheet.mergeCells(r, dc, r, dc + cfg.maxLocPerSeg - 1)
-  if (hasSummaryCol) {
+  setCell(sheet, r, rc, '设备完好率', false, fnt.dataSize, 'center')
+  setCell(sheet, r, dc, '设备完好率', false, fnt.dataSize, 'center')
+  sheet.mergeCells(r, dc, r, finalSummaryCol ? dc + cfg.maxLocPerSeg - 1 : segmentEndCol)
+  if (finalSummaryCol) {
     const totalRate = isLastEffectiveSeg ? calcTotalPassRate(data, allCpIndices, items.length) : '/'
     setCell(sheet, r, summaryCol, totalRate, false, fnt.dataSize, 'center')
   }
@@ -519,7 +466,7 @@ function buildL2Sheet(
   sheet.mergeCells(r, 2, r, 3)
   applyBorderOnly(sheet.getCell(r, 3))
   setCell(sheet, r, 4, '检查项目数', false, LAYOUT_CONFIG.font.headerSize, 'center')
-  setCell(sheet, r, 5, '合格率', false, LAYOUT_CONFIG.font.headerSize, 'center')
+  setCell(sheet, r, 5, '设备完好率', false, LAYOUT_CONFIG.font.headerSize, 'center')
   sheet.mergeCells(r, 5, r, 7)
   for (let c = 6; c <= 7; c++) applyBorderOnly(sheet.getCell(r, c))
   sheet.getRow(r).height = cfg.rowH.tableHeader
@@ -529,7 +476,7 @@ function buildL2Sheet(
   sub.selectedL1Ids.forEach((l1Id, idx) => {
     const l1Tpl = l1Templates.find(t => t.id === l1Id)
     const l1Data = sub.inspectionData[l1Id]
-    const l1Name = l1Tpl?.name ?? l1Data?.l1TemplateName ?? '(未知)'
+    const l1Name = l1Tpl ? getDisplayL1Name(l1Tpl) : (l1Data?.l1TemplateName ?? '(未知)')
     const itemCount = l1Tpl?.inspectionItems.length ?? 0
 
     setCell(sheet, r, 1, idx + 1, false, LAYOUT_CONFIG.font.headerSize, 'center')
@@ -639,15 +586,15 @@ function buildL3Sheet(
 ) {
   const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '检查结果计算表'))
   const cfg = LAYOUT_CONFIG.l3
+  const preview = buildProjectCalcPreview(project, l1Templates)
+  const colEnd = 5
 
   cfg.colWidths.forEach((w, i) => { sheet.getColumn(i + 1).width = w })
 
-  const titleCell = sheet.getCell(1, 1)
-  titleCell.value = '检查结果计算'
+  const titleCell = mergeAndSetCell(sheet, 1, 1, cfg.titleMergeRows, colEnd, '检查结果计算表', true, LAYOUT_CONFIG.font.l3TitleSize, 'center')
   titleCell.font = { bold: true, size: LAYOUT_CONFIG.font.l3TitleSize, name: LAYOUT_CONFIG.font.name }
   titleCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
-  titleCell.border = makeBorder()
-  sheet.mergeCells(1, 1, cfg.titleMergeRows, 6)
+  styleRangeFromCell(sheet, 1, 1, cfg.titleMergeRows, colEnd, titleCell)
   for (let i = 1; i <= cfg.titleMergeRows; i++) {
     sheet.getRow(i).height = cfg.titleMergeRows > 1 ? 18 : 40
   }
@@ -657,107 +604,165 @@ function buildL3Sheet(
   setCell(sheet, r9, 2, '设施',     true, 11, 'left')
   setCell(sheet, r9, 3, '总量',     true, 11, 'center')
   setCell(sheet, r9, 4, '故障数量', true, 11, 'center')
-  setCell(sheet, r9, 5, '合格率',   true, 11, 'center')
+  setCell(sheet, r9, 5, '设备完好率',   true, 11, 'center')
   sheet.getRow(r9).height = 20
 
   let r = r9 + 1
 
-  project.subdivisions.forEach((sub, subIdx) => {
-    const subName = sub.l2TemplateName || `分部${subIdx + 1}`
-    const subScore = calcSubdivisionScore(sub, l1Templates)
-    const subDeduction = Object.values(sub.scoringData).reduce((a, b) => a + (b ?? 0), 0)
-    const finalScore = subScore !== null ? subScore - subDeduction : null
+  preview.subdivisions.forEach((sub, subIdx) => {
+    const subName = sub.name || `分部${subIdx + 1}`
+    const finalScore = sub.finalScore
 
     const subNameCell = setCell(sheet, r, 1, `分部名称：${subName}`, true, 11, 'left')
-    subNameCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cfg.subNameBgArgb } }
     sheet.mergeCells(r, 1, r, 4)
-    for (let c = 2; c <= 4; c++) {
-      const cell = sheet.getCell(r, c)
-      cell.border = makeBorder()
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cfg.subNameBgArgb } }
-    }
+    styleRangeFromCell(sheet, r, 1, r, 4, subNameCell)
+    fillRange(sheet, r, 1, r, colEnd, cfg.subNameBgArgb)
     const scoreCell = setCell(sheet, r, 5, finalScore !== null ? `${finalScore.toFixed(2)}` : '/', true, 11, 'center')
     scoreCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cfg.subNameBgArgb } }
     sheet.getRow(r).height = 20
     r++
 
-    sub.selectedL1Ids.forEach((l1Id, l1Idx) => {
-      const l1Tpl = l1Templates.find(t => t.id === l1Id)
-      const l1Data = sub.inspectionData[l1Id]
-      const l1Name = l1Tpl?.name ?? l1Data?.l1TemplateName ?? '(未知)'
-
+    sub.l1Rows.forEach((row, l1Idx) => {
       setCell(sheet, r, 1, l1Idx + 1, false, 11, 'center')
-      setCell(sheet, r, 2, l1Name, false, 11, 'left')
-
-      if (l1Data && l1Tpl) {
-        const allCpIndices = l1Data.checkpoints.map((_, i) => i)
-        const totalCount = countValidCheckpoints(l1Data, allCpIndices)
-        const faultCount = countFaults(l1Data, allCpIndices)
-        const rate = calcTotalPassRate(l1Data, allCpIndices, l1Tpl.inspectionItems.length)
-        setCell(sheet, r, 3, totalCount, false, 11, 'center')
-        setCell(sheet, r, 4, faultCount, false, 11, 'center')
-        setCell(sheet, r, 5, rate, false, 11, 'center')
-      } else {
-        setCell(sheet, r, 3, '/', false, 11, 'center')
-        setCell(sheet, r, 4, '/', false, 11, 'center')
-        setCell(sheet, r, 5, '/', false, 11, 'center')
-      }
+      setCell(sheet, r, 2, row.name, false, 11, 'left')
+      setCell(sheet, r, 3, row.totalCount, false, 11, 'center')
+      setCell(sheet, r, 4, row.faultCount, false, 11, 'center')
+      setCell(sheet, r, 5, row.passRate, false, 11, 'center')
       sheet.getRow(r).height = 20
       r++
     })
 
-    let totalItems = 0
-    let totalFaults = 0
-    sub.selectedL1Ids.forEach(l1Id => {
-      const l1Tpl = l1Templates.find(t => t.id === l1Id)
-      const l1Data = sub.inspectionData[l1Id]
-      if (l1Data && l1Tpl) {
-        const allIdx = l1Data.checkpoints.map((_, i) => i)
-        totalItems += countValidCheckpoints(l1Data, allIdx)
-        totalFaults += countFaults(l1Data, allIdx)
-      }
-    })
-    const totalRate = totalItems > 0
-      ? ((1 - totalFaults / totalItems) * 100).toFixed(1) + '%'
-      : '/'
     setCell(sheet, r, 1, '合计', false, 11, 'left')
     sheet.mergeCells(r, 1, r, 2)
     applyBorderOnly(sheet.getCell(r, 2))
-    setCell(sheet, r, 3, totalItems, false, 11, 'center')
-    setCell(sheet, r, 4, totalFaults, false, 11, 'center')
-    setCell(sheet, r, 5, totalRate, false, 11, 'center')
+    setCell(sheet, r, 3, sub.totalCount, false, 11, 'center')
+    setCell(sheet, r, 4, sub.faultCount, false, 11, 'center')
+    setCell(sheet, r, 5, sub.passRate, false, 11, 'center')
     sheet.getRow(r).height = 20
     r++
   })
 
-  const allFinalScores = project.subdivisions.map(s => {
-    const sc = calcSubdivisionScore(s, l1Templates)
-    const ded = Object.values(s.scoringData).reduce((a, b) => a + (b ?? 0), 0)
-    return sc !== null ? sc - ded : null
-  }).filter((s): s is number => s !== null)
-
-  const avgAll = allFinalScores.length > 0
-    ? (allFinalScores.reduce((a, b) => a + b, 0) / allFinalScores.length).toFixed(2)
-    : '/'
-
   setCell(sheet, r, 1, '合计', false, 11, 'left')
   sheet.mergeCells(r, 1, r, 4)
   for (let c = 2; c <= 4; c++) applyBorderOnly(sheet.getCell(r, c))
-  setCell(sheet, r, 5, avgAll, false, 11, 'center')
+  setCell(sheet, r, 5, preview.avgScoreDisplay, false, 11, 'center')
   sheet.getRow(r).height = 20
   r++
 
-  const avgNum = avgAll === '/' ? null : parseFloat(avgAll)
-  const overallGrade = avgNum !== null
-    ? (avgNum >= 85 ? '优良' : avgNum >= 70 ? '合格' : '不合格')
-    : '/'
   setCell(sheet, r, 1, '总体质量等级', true, 11, 'left')
   sheet.mergeCells(r, 1, r, 4)
   for (let c = 2; c <= 4; c++) applyBorderOnly(sheet.getCell(r, c))
-  setCell(sheet, r, 5, overallGrade, true, 11, 'center')
-  sheet.mergeCells(r, 5, r, 6)
-  applyBorderOnly(sheet.getCell(r, 6))
+  setCell(sheet, r, 5, preview.overallGrade, true, 11, 'center')
   sheet.getRow(r).height = 20
+
+  sheet.pageSetup.printArea = `A1:E${r}`
+}
+
+function buildLocationListSheet(workbook: ExcelJS.Workbook, project: Project) {
+  const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '点位清单表'))
+  const colEnd = 10
+  LAYOUT_CONFIG.list.locationColWidths.forEach((w, idx) => { sheet.getColumn(idx + 1).width = w })
+  buildListSheetTitle(sheet, '检查点位清单', colEnd, project.info.companyName)
+
+  setCell(sheet, 3, 1, '序号', true, 9, 'center')
+  setCell(sheet, 3, 2, '设施名称', true, 9, 'center')
+  setCell(sheet, 3, 3, '单位', true, 9, 'center')
+  setCell(sheet, 3, 4, '数量', true, 9, 'center')
+  mergeAndSetCell(sheet, 3, 5, 3, colEnd, '检测部位', true, 9, 'center')
+  sheet.getRow(3).height = LAYOUT_CONFIG.list.rowH.header
+
+  let row = 4
+  const groups = getLocationGroups(project)
+  groups.forEach(group => {
+    mergeAndSetCell(sheet, row, 1, row, colEnd, group.name, true, 9, 'center')
+    sheet.getRow(row).height = LAYOUT_CONFIG.list.rowH.data
+    row++
+
+    group.items.forEach((item, itemIdx) => {
+      const chunks = chunkLocationNames(item.checkpointNames, item.quantity)
+      const itemStartRow = row
+
+      chunks.forEach(chunk => {
+        chunk.forEach((name, idx) => {
+          setCell(sheet, row, 5 + idx, name, false, 9, 'center')
+        })
+        sheet.getRow(row).height = LAYOUT_CONFIG.list.rowH.data
+        row++
+      })
+
+      const itemEndRow = row - 1
+      setCell(sheet, itemStartRow, 1, itemIdx + 1, false, 9, 'center')
+      setCell(sheet, itemStartRow, 2, item.l1TemplateName, false, 9, 'center')
+      setCell(sheet, itemStartRow, 3, item.unit || '/', false, 9, 'center')
+      setCell(sheet, itemStartRow, 4, item.quantity, false, 9, 'center')
+      for (let col = 1; col <= 4; col++) {
+        mergeCellsAndStyle(sheet, itemStartRow, col, itemEndRow, col)
+      }
+    })
+  })
+
+  applyListSheetPageSetup(sheet, colEnd, Math.max(3, row - 1))
+}
+
+function buildResultListSheet(workbook: ExcelJS.Workbook, project: Project, l1Templates: L1Template[]) {
+  const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '结果清单'))
+  const colEnd = 5
+  LAYOUT_CONFIG.list.resultColWidths.forEach((w, idx) => { sheet.getColumn(idx + 1).width = w })
+  buildListSheetTitle(sheet, '检查结果清单', colEnd, project.info.companyName)
+
+  ;['序号', '分部工程', '分项工程', '故障台数', '设备完好率'].forEach((header, idx) => {
+    setCell(sheet, 3, idx + 1, header, true, 10, 'center')
+  })
+  sheet.getRow(3).height = LAYOUT_CONFIG.list.rowH.header
+
+  let row = 4
+  const preview = buildProjectCalcPreview(project, l1Templates)
+  preview.subdivisions.forEach(sub => {
+    const startRow = row
+    sub.l1Rows.forEach((item, idx) => {
+      setCell(sheet, row, 1, idx + 1, false, 10, 'center')
+      setCell(sheet, row, 2, sub.name, false, 10, 'center')
+      setCell(sheet, row, 3, item.name, false, 10, 'center')
+      setCell(sheet, row, 4, item.faultCount, false, 10, 'center')
+      setCell(sheet, row, 5, item.passRate, false, 10, 'center')
+      sheet.getRow(row).height = LAYOUT_CONFIG.list.rowH.data
+      row++
+    })
+    if (row - 1 > startRow) mergeCellsAndStyle(sheet, startRow, 2, row - 1, 2)
+  })
+
+  applyListSheetPageSetup(sheet, colEnd, Math.max(3, row - 1))
+}
+
+function buildDeviceListSheet(
+  workbook: ExcelJS.Workbook,
+  project: Project,
+  l1Templates: L1Template[],
+  deviceItems: DeviceItem[],
+) {
+  const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '设备清单'))
+  const colEnd = 6
+  LAYOUT_CONFIG.list.deviceColWidths.forEach((w, idx) => { sheet.getColumn(idx + 1).width = w })
+  buildListSheetTitle(sheet, '设备清单', colEnd, project.info.companyName)
+
+  ;['序号', '设备名称', '设备型号', '单位', '数量', '设备用途'].forEach((header, idx) => {
+    setCell(sheet, 3, idx + 1, header, true, 10, 'center')
+  })
+  sheet.getRow(3).height = LAYOUT_CONFIG.list.rowH.header
+
+  let row = 4
+  buildDeviceListRows(project, l1Templates, deviceItems).forEach((rowItem, idx) => {
+    setCell(sheet, row, 1, idx + 1, false, 11, 'center')
+    setCell(sheet, row, 2, rowItem.device.name, false, 11, 'center')
+    setCell(sheet, row, 3, rowItem.device.model || '/', false, 11, 'center')
+    setCell(sheet, row, 4, rowItem.device.unit || '/', false, 11, 'center')
+    setCell(sheet, row, 5, 1, false, 11, 'center')
+    setCell(sheet, row, 6, rowItem.device.purpose || '/', false, 11, 'center')
+    sheet.getRow(row).height = LAYOUT_CONFIG.list.rowH.data
+    row++
+  })
+
+  applyListSheetPageSetup(sheet, colEnd, Math.max(3, row - 1))
 }
 
 // ============================================================
@@ -817,6 +822,116 @@ function setCell(
   return cell
 }
 
+function mergeAndSetCell(
+  sheet: ExcelJS.Worksheet,
+  startRow: number,
+  startCol: number,
+  endRow: number,
+  endCol: number,
+  value: string | number,
+  bold: boolean,
+  size: number,
+  align: 'left' | 'center' | 'right' = 'center',
+): ExcelJS.Cell {
+  const cell = setCell(sheet, startRow, startCol, value, bold, size, align)
+  if (startRow !== endRow || startCol !== endCol) {
+    sheet.mergeCells(startRow, startCol, endRow, endCol)
+  }
+  styleRangeFromCell(sheet, startRow, startCol, endRow, endCol, cell)
+  return cell
+}
+
+function mergeCellsAndStyle(
+  sheet: ExcelJS.Worksheet,
+  startRow: number,
+  startCol: number,
+  endRow: number,
+  endCol: number,
+) {
+  const cell = sheet.getCell(startRow, startCol)
+  if (startRow !== endRow || startCol !== endCol) {
+    sheet.mergeCells(startRow, startCol, endRow, endCol)
+  }
+  styleRangeFromCell(sheet, startRow, startCol, endRow, endCol, cell)
+}
+
+function styleRangeFromCell(
+  sheet: ExcelJS.Worksheet,
+  startRow: number,
+  startCol: number,
+  endRow: number,
+  endCol: number,
+  source: ExcelJS.Cell,
+) {
+  for (let row = startRow; row <= endRow; row++) {
+    for (let col = startCol; col <= endCol; col++) {
+      const cell = sheet.getCell(row, col)
+      cell.font = source.font
+      cell.alignment = source.alignment
+      cell.fill = source.fill
+      cell.border = makeBorder()
+    }
+  }
+}
+
+function fillRange(
+  sheet: ExcelJS.Worksheet,
+  startRow: number,
+  startCol: number,
+  endRow: number,
+  endCol: number,
+  argb: string,
+) {
+  for (let row = startRow; row <= endRow; row++) {
+    for (let col = startCol; col <= endCol; col++) {
+      sheet.getCell(row, col).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } }
+    }
+  }
+}
+
+function buildListSheetTitle(
+  sheet: ExcelJS.Worksheet,
+  title: string,
+  colEnd: number,
+  companyName?: string,
+) {
+  const companyCell = mergeAndSetCell(sheet, 1, 1, 1, colEnd, companyName || '检查公司', true, 12, 'center')
+  companyCell.font = { bold: true, size: 12, name: '仿宋_GB2312' }
+  styleRangeFromCell(sheet, 1, 1, 1, colEnd, companyCell)
+  sheet.getRow(1).height = LAYOUT_CONFIG.list.rowH.company
+
+  const titleCell = mergeAndSetCell(sheet, 2, 1, 2, colEnd, title, true, 18, 'center')
+  titleCell.font = { bold: true, size: 18, name: '仿宋_GB2312' }
+  styleRangeFromCell(sheet, 2, 1, 2, colEnd, titleCell)
+  sheet.getRow(2).height = LAYOUT_CONFIG.list.rowH.title
+}
+
+function applyListSheetPageSetup(
+  sheet: ExcelJS.Worksheet,
+  colEnd: number,
+  lastRow: number,
+) {
+  const setup = LAYOUT_CONFIG.list.pageSetup
+  sheet.pageSetup.paperSize = setup.paperSize
+  sheet.pageSetup.orientation = setup.orientation
+  sheet.pageSetup.fitToPage = setup.fitToPage
+  sheet.pageSetup.scale = setup.scale
+  sheet.pageSetup.fitToWidth = setup.fitToWidth
+  sheet.pageSetup.fitToHeight = setup.fitToHeight
+  sheet.pageSetup.showGridLines = setup.showGridLines
+  sheet.pageSetup.horizontalCentered = setup.horizontalCentered
+  sheet.pageSetup.verticalCentered = setup.verticalCentered
+  sheet.pageSetup.margins = {
+    left: setup.marginsCm.left / 2.54,
+    right: setup.marginsCm.right / 2.54,
+    top: setup.marginsCm.top / 2.54,
+    bottom: setup.marginsCm.bottom / 2.54,
+    header: setup.marginsCm.header / 2.54,
+    footer: setup.marginsCm.footer / 2.54,
+  }
+  sheet.pageSetup.printArea = `A1:${columnNumberToName(colEnd)}${lastRow}`
+}
+
 function applyBorderOnly(cell: ExcelJS.Cell) {
   cell.border = makeBorder()
 }
@@ -831,7 +946,12 @@ function makeBorder(): Partial<ExcelJS.Borders> {
 // ============================================================
 
 function uniqueSheetName(workbook: ExcelJS.Workbook, name: string): string {
-  let base = name.slice(0, 31)
+  let base = name
+    .replace(/[\\/?*\[\]:]/g, '_')
+    .replace(/^'+|'+$/g, '')
+    .trim()
+    .slice(0, 31)
+  if (!base) base = 'Sheet'
   const existing = workbook.worksheets.map(ws => ws.name)
   if (!existing.includes(base)) return base
   for (let i = 2; i < 100; i++) {
@@ -853,6 +973,51 @@ function columnNumberToName(col: number): string {
   }
 
   return name
+}
+
+function getLocationGroups(project: Project): { name: string; items: ProjectLocationItem[] }[] {
+  const allItems = project.locationItems ?? []
+  const usedIds = new Set<string>()
+  const groups: { name: string; items: ProjectLocationItem[] }[] = []
+
+  project.subdivisions.forEach(sub => {
+    const items = allItems.filter(item => item.l2TemplateId === sub.l2TemplateId)
+    if (items.length === 0) return
+    groups.push({
+      name: sub.l2TemplateName || items[0].l2TemplateName || '分部工程',
+      items,
+    })
+    items.forEach(item => usedIds.add(item.id))
+  })
+
+  const remaining = allItems.filter(item => !usedIds.has(item.id))
+  const remainingGroups = new Map<string, { name: string; items: ProjectLocationItem[] }>()
+  remaining.forEach(item => {
+    const key = item.l2TemplateId || item.l2TemplateName
+    const group = remainingGroups.get(key)
+    if (group) {
+      group.items.push(item)
+    } else {
+      remainingGroups.set(key, { name: item.l2TemplateName || '分部工程', items: [item] })
+    }
+  })
+
+  return groups.concat([...remainingGroups.values()])
+}
+
+function chunkLocationNames(names: string[], quantity: number): string[][] {
+  const total = Math.max(1, quantity || 0, names.length)
+  const chunks: string[][] = []
+
+  for (let start = 0; start < total; start += 6) {
+    const chunk: string[] = []
+    for (let idx = start; idx < start + 6; idx++) {
+      chunk.push(idx < total ? (names[idx]?.trim() || '/') : '/')
+    }
+    chunks.push(chunk)
+  }
+
+  return chunks
 }
 
 function computeGroupMerges(items: { groupId: string }[]): { start: number; count: number; groupId: string }[] {

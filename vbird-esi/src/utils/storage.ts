@@ -11,6 +11,7 @@ export const STORAGE_DIRS = {
   TEMPLATES_L1: 'templates/l1',
   TEMPLATES_L2: 'templates/l2',
   TEMPLATES_L3: 'templates/l3',
+  DEVICES: 'devices',
   PROJECTS: 'projects',
 } as const
 
@@ -87,4 +88,10 @@ export async function loadAllData<T>(subDir: string): Promise<T[]> {
 export async function deleteData(subDir: string, id: string): Promise<void> {
   const path = await getFilePath(subDir, `${id}.json`)
   await deleteFile(path)
+}
+
+/** 删除指定业务目录下全部 JSON 数据 */
+export async function clearDataDir(subDir: string): Promise<void> {
+  const files = await listJsonFiles(subDir)
+  await Promise.all(files.map(file => deleteFile(file)))
 }

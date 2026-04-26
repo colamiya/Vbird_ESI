@@ -7,7 +7,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Plus, Delete, Edit, Search, View } from '@element-plus/icons-vue'
 import { useTemplateStore } from '@/stores/templateStore'
-import type { L1Template, L2Template, L3Template, InspectionTableData } from '@/types'
+import type { L1Template, L2Template, L3Template, InspectionTableData, DeviceItem } from '@/types'
 import { generateId } from '@/utils/id'
 import InspectionTable from '@/components/InspectionTable.vue'
 import L1TemplateDialog from './L1TemplateDialog.vue'
@@ -16,7 +16,7 @@ import L3TemplateDialog from './L3TemplateDialog.vue'
 
 const store = useTemplateStore()
 
-const activeTab = ref<'l1' | 'l2' | 'l3'>('l1')
+const activeTab = ref<'l1' | 'l2' | 'l3' | 'device'>('l1')
 const searchKeyword = ref('')
 
 const filteredL1 = computed(() => {
@@ -37,6 +37,16 @@ const filteredL3 = computed(() => {
   const kw = searchKeyword.value.trim().toLowerCase()
   if (!kw) return store.l3Templates
   return store.l3Templates.filter(t => t.name.toLowerCase().includes(kw))
+})
+
+const filteredDevices = computed(() => {
+  const kw = searchKeyword.value.trim().toLowerCase()
+  if (!kw) return store.deviceItems
+  return store.deviceItems.filter(t =>
+    t.name.toLowerCase().includes(kw) ||
+    t.model.toLowerCase().includes(kw) ||
+    t.purpose.toLowerCase().includes(kw)
+  )
 })
 
 // ---- L1 预览弹窗（迷你表格） ----
@@ -129,9 +139,66 @@ async function handleDeleteL3(tpl: L3Template) {
   ElMessage.success('模板已删除')
 }
 
+// ---- 设备库 ----
+const showDeviceDialog = ref(false)
+const editingDevice = ref<DeviceItem | null>(null)
+const deviceForm = ref({
+  name: '',
+  model: '',
+  unit: '',
+  purpose: '',
+})
+
+function openCreateDevice() {
+  editingDevice.value = null
+  deviceForm.value = { name: '', model: '', unit: '', purpose: '' }
+  showDeviceDialog.value = true
+}
+
+function openEditDevice(device: DeviceItem) {
+  editingDevice.value = device
+  deviceForm.value = {
+    name: device.name,
+    model: device.model,
+    unit: device.unit,
+    purpose: device.purpose,
+  }
+  showDeviceDialog.value = true
+}
+
+async function saveDevice() {
+  if (!deviceForm.value.name.trim()) {
+    ElMessage.warning('请输入设备名称')
+    return
+  }
+  const now = new Date().toISOString()
+  await store.saveDeviceItem({
+    id: editingDevice.value?.id ?? generateId(),
+    name: deviceForm.value.name.trim(),
+    model: deviceForm.value.model.trim(),
+    unit: deviceForm.value.unit.trim(),
+    purpose: deviceForm.value.purpose.trim(),
+    createdAt: editingDevice.value?.createdAt ?? now,
+    updatedAt: now,
+  })
+  showDeviceDialog.value = false
+  ElMessage.success(editingDevice.value ? '设备已更新' : '设备已创建')
+}
+
+async function handleDeleteDevice(device: DeviceItem) {
+  try {
+    await ElMessageBox.confirm(`确定删除设备「${device.name}」？模板中的设备关联会失效。`, '删除确认', { type: 'warning' })
+  } catch {
+    return
+  }
+  await store.deleteDeviceItem(device.id)
+  ElMessage.success('设备已删除')
+}
+
 const l1Count = computed(() => store.l1Templates.length)
 const l2Count = computed(() => store.l2Templates.length)
 const l3Count = computed(() => store.l3Templates.length)
+const deviceCount = computed(() => store.deviceItems.length)
 
 function formatDate(iso: string): string {
   try {
@@ -189,6 +256,15 @@ onMounted(() => { store.loadAll() })
           <span class="stat-value">{{ l3Count }}</span>
         </div>
       </div>
+      <div class="stat-card" :class="{ active: activeTab === 'device' }" @click="activeTab = 'device'">
+        <div class="stat-icon device">
+          <svg viewBox="0 0 20 20" fill="none"><rect x="4" y="5" width="12" height="10" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M7 3v4M13 3v4M7 17v-4M13 17v-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </div>
+        <div class="stat-info">
+          <span class="stat-label">设备库</span>
+          <span class="stat-value">{{ deviceCount }}</span>
+        </div>
+      </div>
     </div>
 
     <!-- 搜索栏 -->
@@ -228,6 +304,7 @@ onMounted(() => { store.loadAll() })
           </div>
           <div class="card-meta">
             <span v-if="tpl.facilityName" class="meta-tag">{{ tpl.facilityName }}</span>
+            <span v-if="tpl.isCritical" class="meta-tag danger">重点设备 *</span>
             <span class="meta-info">{{ tpl.inspectionItems.length }} 个检查项</span>
           </div>
           <div class="card-footer"><span class="card-time">{{ formatDate(tpl.updatedAt) }}</span></div>
@@ -270,7 +347,7 @@ onMounted(() => { store.loadAll() })
     </div>
 
     <!-- L3 列表 -->
-    <div v-else class="template-list-section">
+    <div v-else-if="activeTab === 'l3'" class="template-list-section">
       <div class="list-toolbar">
         <h3 class="list-title">L3 总表模板</h3>
         <el-button type="primary" :icon="Plus" size="small" @click="openCreateL3">新建模板</el-button>
@@ -303,10 +380,73 @@ onMounted(() => { store.loadAll() })
       </div>
     </div>
 
+    <!-- 设备库 -->
+    <div v-else class="template-list-section">
+      <div class="list-toolbar">
+        <h3 class="list-title">检查设备库</h3>
+        <el-button type="primary" :icon="Plus" size="small" @click="openCreateDevice">新增设备</el-button>
+      </div>
+      <div v-if="store.loading" class="skeleton-grid">
+        <div v-for="i in 3" :key="i" class="skeleton-card"><div class="sk-line w60"></div><div class="sk-line w40"></div><div class="sk-line w80"></div></div>
+      </div>
+      <div v-else-if="store.deviceItems.length === 0" class="empty-state">
+        <svg class="empty-icon-svg" viewBox="0 0 48 48" fill="none"><rect x="10" y="14" width="28" height="20" rx="4" stroke="currentColor" stroke-width="2"/><path d="M16 8v8M32 8v8M16 40v-8M32 40v-8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <h3>暂无设备</h3>
+        <p>新增设备后，可在 L1 检查项中关联设备</p>
+        <el-button type="primary" :icon="Plus" @click="openCreateDevice" style="margin-top: 12px" size="small">新增设备</el-button>
+      </div>
+      <div v-else class="template-grid">
+        <div v-for="device in filteredDevices" :key="device.id" class="template-card">
+          <div class="card-header">
+            <h4 class="card-title">{{ device.name }}</h4>
+            <div class="card-actions">
+              <el-button :icon="Edit" size="small" text @click="openEditDevice(device)" />
+              <el-button :icon="Delete" size="small" text type="danger" @click="handleDeleteDevice(device)" />
+            </div>
+          </div>
+          <div class="card-meta">
+            <span v-if="device.model" class="meta-tag">{{ device.model }}</span>
+            <span v-if="device.unit" class="meta-info">单位：{{ device.unit }}</span>
+          </div>
+          <div v-if="device.purpose" class="device-purpose">{{ device.purpose }}</div>
+          <div class="card-footer"><span class="card-time">{{ formatDate(device.updatedAt) }}</span></div>
+        </div>
+      </div>
+    </div>
+
     <!-- 对话框 -->
     <L1TemplateDialog v-model:visible="showL1Dialog" :template="editingL1" @save="handleSaveL1" />
     <L2TemplateDialog v-model:visible="showL2Dialog" :template="editingL2" @save="handleSaveL2" />
     <L3TemplateDialog v-model:visible="showL3Dialog" :template="editingL3" @save="handleSaveL3" />
+
+    <el-dialog v-model="showDeviceDialog" :title="editingDevice ? '编辑设备' : '新增设备'" width="560px" :close-on-click-modal="false" destroy-on-close>
+      <div class="form-section">
+        <div class="form-row">
+          <div class="form-field">
+            <label>设备名称 <span class="required">*</span></label>
+            <el-input v-model="deviceForm.name" />
+          </div>
+          <div class="form-field">
+            <label>设备型号</label>
+            <el-input v-model="deviceForm.model" />
+          </div>
+        </div>
+        <div class="form-row" style="margin-top: 12px">
+          <div class="form-field">
+            <label>单位</label>
+            <el-input v-model="deviceForm.unit" placeholder="台/套" />
+          </div>
+          <div class="form-field">
+            <label>设备用途</label>
+            <el-input v-model="deviceForm.purpose" />
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showDeviceDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveDevice">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- E4: 迷你表格预览弹窗 -->
     <el-dialog
@@ -339,7 +479,7 @@ onMounted(() => { store.loadAll() })
 .page-title { font-size: 22px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; margin-bottom: 2px; }
 .page-desc { color: var(--text-secondary); font-size: 13px; }
 
-.tab-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-sm); margin-bottom: var(--space-lg); }
+.tab-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-sm); margin-bottom: var(--space-lg); }
 .stat-card { display: flex; align-items: center; gap: var(--space-md); padding: var(--space-md) var(--space-lg); background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); cursor: pointer; transition: all var(--transition-normal); }
 .stat-card:hover { border-color: var(--border-color-light); }
 .stat-card.active { border-color: var(--color-primary); box-shadow: var(--shadow-glow); }
@@ -348,6 +488,7 @@ onMounted(() => { store.loadAll() })
 .stat-icon.l1 { background: hsla(217, 72%, 50%, 0.1); color: hsl(217, 72%, 45%); }
 .stat-icon.l2 { background: hsla(152, 56%, 40%, 0.1); color: hsl(152, 56%, 36%); }
 .stat-icon.l3 { background: hsla(270, 55%, 50%, 0.1); color: hsl(270, 55%, 42%); }
+.stat-icon.device { background: hsla(38, 80%, 50%, 0.12); color: hsl(38, 80%, 36%); }
 .stat-info { display: flex; flex-direction: column; gap: 1px; }
 .stat-label { font-size: 12px; color: var(--text-secondary); }
 .stat-value { font-size: 22px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
@@ -374,11 +515,13 @@ onMounted(() => { store.loadAll() })
 .template-card:hover .card-actions { opacity: 1; }
 .card-meta { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 .meta-tag { font-size: 11px; padding: 1px 6px; background: var(--color-primary-bg); color: var(--color-primary); border-radius: var(--radius-sm); }
+.meta-tag.danger { background: hsla(0, 72%, 51%, 0.08); color: var(--color-danger); }
 .meta-tag.small { font-size: 10px; padding: 1px 5px; }
 .meta-info { font-size: 11px; color: var(--text-tertiary); }
 .card-tags { display: flex; gap: 4px; flex-wrap: wrap; }
 .card-footer { margin-top: auto; }
 .card-time { font-size: 10px; color: var(--text-tertiary); }
+.device-purpose { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
 
 /* 空状态 — SVG 代替 emoji */
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--space-2xl) 0; color: var(--text-tertiary); }

@@ -42,6 +42,8 @@ export interface InspectionItem {
     min: number
     max: number
   }
+  /** 关联设备库条目；该行任一地点存在非空且非 "/" 的内容时进入设备清单 */
+  deviceId?: string
   rowHeight?: number     // 行高（px）
 }
 
@@ -58,6 +60,8 @@ export interface L1Template {
   id: string
   name: string                 // 模板名称，如 "消防设施"
   facilityName: string         // 设施名称（显示在表头）
+  /** 重点设备标记；界面/导出显示为名称后缀 "*"，计算按字段判断 */
+  isCritical?: boolean
   createdAt: string
   updatedAt: string
 
@@ -65,7 +69,7 @@ export interface L1Template {
   columns: {
     fixedColumns: FixedColumn[]      // 固定列: 序号、检查项目、技术要求
     dataColumnWidth: number          // 检查点列的默认列宽
-    summaryColumnWidth: number       // 汇总列的列宽
+    summaryColumnWidth: number       // 单项检测结果汇总列的列宽
   }
 
   // 检查项目行（黄色区域行定义）

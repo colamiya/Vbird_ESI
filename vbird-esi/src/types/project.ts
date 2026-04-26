@@ -26,6 +26,8 @@ export interface InspectionTableData {
   l1TemplateId: string
   /** 模板名称快照（防止模板删除后丢失名称） */
   l1TemplateName: string
+  /** 对应项目级点位清单条目 */
+  locationItemId?: string
   /** 检查点列定义 */
   checkpoints: Checkpoint[]
   /** 数据矩阵 [行索引][检查点索引] */
@@ -71,6 +73,18 @@ export interface ProjectSubdivision {
   scoringData: ScoringData
 }
 
+/** 项目级点位清单条目，是项目结构与 L1 检查点列的主数据源 */
+export interface ProjectLocationItem {
+  id: string
+  l2TemplateId: string
+  l2TemplateName: string
+  l1TemplateId: string
+  l1TemplateName: string
+  unit: string
+  quantity: number
+  checkpointNames: string[]
+}
+
 /** 项目基本信息 */
 export interface ProjectInfo {
   companyName: string            // 检查公司
@@ -89,6 +103,10 @@ export interface Project {
   info: ProjectInfo
   /** 引用的 L3 模板 ID */
   l3TemplateId: string
+  /** 数据结构版本；2 起包含项目级点位清单 */
+  dataVersion?: number
+  /** 项目级点位清单 */
+  locationItems?: ProjectLocationItem[]
   /** 项目结构 — 分部列表 */
   subdivisions: ProjectSubdivision[]
 }

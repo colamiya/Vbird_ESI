@@ -7,6 +7,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Project } from '@/types'
 import { saveData, loadAllData, deleteData, STORAGE_DIRS } from '@/utils/storage'
+import { ensureProjectLocationItems } from '@/utils/projectStructure'
 
 export const useProjectStore = defineStore('project', () => {
   // ---- 状态 ----
@@ -23,7 +24,8 @@ export const useProjectStore = defineStore('project', () => {
   async function loadProjects() {
     loading.value = true
     try {
-      projects.value = await loadAllData<Project>(STORAGE_DIRS.PROJECTS)
+      projects.value = (await loadAllData<Project>(STORAGE_DIRS.PROJECTS))
+        .map(project => ensureProjectLocationItems(project))
     } catch (e) {
       console.warn('加载项目失败:', e)
       projects.value = []
@@ -33,6 +35,7 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   async function saveProject(project: Project) {
+    ensureProjectLocationItems(project)
     project.updatedAt = new Date().toISOString()
     await saveData(STORAGE_DIRS.PROJECTS, project)
     const idx = projects.value.findIndex(p => p.id === project.id)

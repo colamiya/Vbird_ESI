@@ -6,6 +6,8 @@
 >
 > 最后更新: 2026-04-18
 
+> 2026-04-26 补充：`other/20260425-New` 新需求已进入实现。项目新增“项目级点位清单 / 结果清单 / 设备清单 / 检查设备库 / 重点设备 / 设备完好率 / 全量系统数据导入导出”链路。后续判断现状时以代码和 `ONGOING.md` 的 2026-04-26 补充为准。
+
 ---
 
 ## 🚨 首要行动 (MANDATORY FIRST STEP)
@@ -116,15 +118,19 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 | `src/types/cell.ts` | 四色语义枚举、颜色映射、可编辑判定 | 低 |
 | `src/types/template.ts` | L1/L2/L3 模板类型（含 DeductionItem / **GradeThreshold**） | 中 |
 | `src/types/project.ts` | 项目、分部、点检实例（含 notes/**segmentBreaks**/**segmentLayout**/rowBreaks/ScoringData） | 中 |
+| `src/types/device.ts` | 检查设备库类型（设备名称/型号/单位/用途），设备清单数量固定为 1 | 中 |
 | `src/stores/templateStore.ts` | 模板三级 CRUD 状态管理 (Pinia) | 中 |
 | `src/stores/projectStore.ts` | 项目 CRUD + 当前项目跟踪 (Pinia) | 中 |
+| `src/config/excelLayout.ts` | Excel 导出版式集中配置：L1 打印页边距/列宽/比例、L2/L3/清单列宽、行高、打印缩放、颜色与边框 | 高 |
 | `src/utils/storage.ts` | 文件存储封装（前端→Rust） | 中 |
+| `src/utils/backup.ts` | 单 JSON 全量系统数据导入导出（模板/项目/设备库），导入为整体替换 | 中 |
 | `src/utils/id.ts` | UUID 生成 + 时间戳工具 | 低 |
+| `src/utils/projectStructure.ts` | 项目级点位清单迁移与同步工具，负责点位清单 ↔ L2/L1/检查点列结构同步 | 高 |
 | `src/utils/segmentLayout.ts` | **【Phase 11/15 重构】** 坐标式布局工具函数（computeSegments / getOrMigrateLayout / buildLayoutGrid / getMaxGridRow / getMaxGridCol），主要服务 UI 分段与旧布局兼容 | 中 |
-| `src/utils/l1PrintLayout.ts` | **【新增】** L1 打印分页工具：A4 `pageSetup` / 常规页边距 / 动态行高估算 / 逻辑分页 + Worksheet 页块布局 + 页型动态列宽，供 `excelExport.ts` 与 `SegmentLayoutEditor.vue` 共用 | 中 |
+| `src/utils/l1PrintLayout.ts` | **【新增】** L1 打印分页工具：读取 `excelLayout.ts` 配置，负责动态行高估算 / 逻辑分页 + Worksheet 页块布局 + 页型动态列宽，供 `excelExport.ts` 与 `SegmentLayoutEditor.vue` 共用 | 中 |
 | `src/utils/projectCalc.ts` | **【新增】** 项目/L3 汇总计算共享工具（总量 / 故障数量 / 合格率 / 分部评分 / 检查结果计算预览），供 `excelExport.ts` 与 `ProjectEditor.vue` 共用 | 中 |
 | `src/utils/numericRule.ts` | 数值条件判定引擎（UI/导出复用）：`parseNumeric / evalNumericRule / isPassed` | 中 |
-| `src/utils/excelExport.ts` | Excel 导出核心逻辑：复用 `l1PrintLayout.ts` + `projectCalc.ts`；L1 显式写入 Excel `pageSetup`、按横向页块排布；列宽按页型动态铺满；同位次备注行共享高度；末页汇总列按段索引判定 | 中 |
+| `src/utils/excelExport.ts` | Excel 导出核心逻辑：读取 `excelLayout.ts` 配置，复用 `l1PrintLayout.ts` + `projectCalc.ts`；L1 显式写入 Excel `pageSetup`、按横向页块排布；列宽按页型动态铺满；同位次备注行共享高度；末页汇总列按段索引判定 | 中 |
 | `src/views/TemplateManager/TemplateManager.vue` | 模板管理主页：三级 Tab + 搜索 + 迷你预览 | 高 |
 | `src/views/TemplateManager/L1TemplateDialog.vue` | L1 模板创建/编辑对话框（文本下拉固定 + 数值条件配置） | 中 |
 | `src/views/TemplateManager/L2TemplateDialog.vue` | L2 模板创建/编辑 + 穿梭框关联 L1 | 中 |

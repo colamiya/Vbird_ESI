@@ -5,7 +5,7 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { L1Template, L2Template, L3Template } from '@/types'
+import type { L1Template, L2Template, L3Template, DeviceItem } from '@/types'
 import { saveData, loadAllData, deleteData, STORAGE_DIRS } from '@/utils/storage'
 
 export const useTemplateStore = defineStore('template', () => {
@@ -13,6 +13,7 @@ export const useTemplateStore = defineStore('template', () => {
   const l1Templates = ref<L1Template[]>([])
   const l2Templates = ref<L2Template[]>([])
   const l3Templates = ref<L3Template[]>([])
+  const deviceItems = ref<DeviceItem[]>([])
   const loading = ref(false)
 
   // ---- L1 操作 ----
@@ -104,14 +105,45 @@ export const useTemplateStore = defineStore('template', () => {
     l3Templates.value = l3Templates.value.filter(t => t.id !== id)
   }
 
+  // ---- 设备库操作 ----
+  async function loadDeviceItems() {
+    loading.value = true
+    try {
+      deviceItems.value = await loadAllData<DeviceItem>(STORAGE_DIRS.DEVICES)
+    } catch (e) {
+      console.warn('加载设备库失败:', e)
+      deviceItems.value = []
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function saveDeviceItem(item: DeviceItem) {
+    item.updatedAt = new Date().toISOString()
+    await saveData(STORAGE_DIRS.DEVICES, item)
+    const idx = deviceItems.value.findIndex(d => d.id === item.id)
+    const copy = JSON.parse(JSON.stringify(item)) as DeviceItem
+    if (idx >= 0) {
+      deviceItems.value[idx] = copy
+    } else {
+      deviceItems.value.push(copy)
+    }
+  }
+
+  async function deleteDeviceItem(id: string) {
+    await deleteData(STORAGE_DIRS.DEVICES, id)
+    deviceItems.value = deviceItems.value.filter(d => d.id !== id)
+  }
+
   // ---- 初始化（并行加载，三级独立容错，一级失败不影响其他级） ----
   async function loadAll() {
     loading.value = true
     // BUG-1: 改用 Promise.allSettled，防止单级异常导致其他级数据丢失
-    const [r1, r2, r3] = await Promise.allSettled([
+    const [r1, r2, r3, r4] = await Promise.allSettled([
       loadAllData<L1Template>(STORAGE_DIRS.TEMPLATES_L1),
       loadAllData<L2Template>(STORAGE_DIRS.TEMPLATES_L2),
       loadAllData<L3Template>(STORAGE_DIRS.TEMPLATES_L3),
+      loadAllData<DeviceItem>(STORAGE_DIRS.DEVICES),
     ])
     if (r1.status === 'fulfilled') l1Templates.value = r1.value
     else console.warn('加载 L1 模板失败:', r1.reason)
@@ -119,6 +151,8 @@ export const useTemplateStore = defineStore('template', () => {
     else console.warn('加载 L2 模板失败:', r2.reason)
     if (r3.status === 'fulfilled') l3Templates.value = r3.value
     else console.warn('加载 L3 模板失败:', r3.reason)
+    if (r4.status === 'fulfilled') deviceItems.value = r4.value
+    else console.warn('加载设备库失败:', r4.reason)
     loading.value = false
   }
 
@@ -126,6 +160,7 @@ export const useTemplateStore = defineStore('template', () => {
     l1Templates,
     l2Templates,
     l3Templates,
+    deviceItems,
     loading,
     loadL1Templates,
     saveL1Template,
@@ -136,6 +171,9 @@ export const useTemplateStore = defineStore('template', () => {
     loadL3Templates,
     saveL3Template,
     deleteL3Template,
+    loadDeviceItems,
+    saveDeviceItem,
+    deleteDeviceItem,
     loadAll,
   }
 })

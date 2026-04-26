@@ -695,7 +695,7 @@ function displayValue(rowIdx: number, cpIdx: number): string {
 }
 
 // ============================
-// 合格率
+// 设备完好率
 // ============================
 function rowPassRate(rowIdx: number): string {
   const row=props.data.values[rowIdx]; if (!row||!row.length) return '-'
@@ -709,7 +709,7 @@ function rowPassRate(rowIdx: number): string {
   }
   return t===0?'-':((p/t)*100).toFixed(1)+'%'
 }
-/** 总合格率：基于 faultValues（是否故障），非故障检查点数 / 有效检查点总数 */
+/** 总设备完好率：基于 faultValues（是否故障），非故障检查点数 / 有效检查点总数 */
 const totalPassRate = computed(() => {
   const valid = props.data.faultValues.filter(v => v!==null && v!==undefined && v!=='' && v!=='/')
   if (valid.length===0) return '-'
@@ -902,7 +902,7 @@ onBeforeUnmount(() => {
                          title="拖拽调整列宽"></div>
                   </th>
                 </template>
-                <th v-if="gridRowIdx === layoutGrid.length - 1" class="cell-red col-summary">合格率</th>
+                <th v-if="gridRowIdx === layoutGrid.length - 1" class="cell-red col-summary">设备完好率</th>
               </tr>
             </thead>
             <tbody>
@@ -1003,10 +1003,10 @@ onBeforeUnmount(() => {
                 <td v-if="gridRowIdx === layoutGrid.length - 1" class="cell-purple col-summary">-</td>
               </tr>
 
-              <!-- 合格率行（只在最后网格行） -->
+              <!-- 设备完好率行（只在最后网格行） -->
               <tr v-if="gridRowIdx === layoutGrid.length - 1" class="summary-row">
                 <td class="cell-red fixed-col col-seq"></td>
-                <td class="cell-red fixed-col col-item">合格率</td>
+                <td class="cell-red fixed-col col-item">设备完好率</td>
                 <td :colspan="lastGridRowTotalDataCols + 2" class="cell-purple total-rate">{{ totalPassRate }}</td>
               </tr>
 
@@ -1016,6 +1016,11 @@ onBeforeUnmount(() => {
                 <td class="cell-red fixed-col col-item">备注</td>
                 <td :colspan="lastGridRowTotalDataCols + 2" class="notes-cell">
                   <textarea class="notes-input" :value="data.notes ?? ''"
+                    @keydown.stop
+                    @copy.stop
+                    @cut.stop
+                    @paste.stop
+                    @input="(e) => updateNotes((e.target as HTMLTextAreaElement).value)"
                     @change="(e) => updateNotes((e.target as HTMLTextAreaElement).value)"
                     placeholder="点检备注信息（可选）" rows="2"></textarea>
                 </td>

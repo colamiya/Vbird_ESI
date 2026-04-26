@@ -9,9 +9,18 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import { useProjectStore } from '@/stores/projectStore'
 import { useTemplateStore } from '@/stores/templateStore'
-import type { ProjectSubdivision, InspectionTableData, L2Template, DeductionItem } from '@/types'
+import type { ProjectSubdivision, InspectionTableData, L2Template, DeductionItem, ProjectLocationItem } from '@/types'
 import InspectionTable from '@/components/InspectionTable.vue'
-import { buildProjectCalcPreview } from '@/utils/projectCalc'
+import { buildDeviceListRows, buildProjectCalcPreview, buildResultListRows } from '@/utils/projectCalc'
+import {
+  defaultCheckpointNames,
+  ensureProjectLocationItems,
+  hasDataBeyondQuantity,
+  normalizeCheckpointNames,
+  removeLocationItemFromProject,
+  syncLocationItemToProject,
+} from '@/utils/projectStructure'
+import { generateId } from '@/utils/id'
 
 const route = useRoute()
 const router = useRouter()
@@ -35,6 +44,7 @@ const currentSub = computed(() =>
 // ---- 当前选中的 L1 点检表 ID（分部内二级 Tab）----
 const activeL1Id = ref<string | null>(null)
 const showCalcPreviewDialog = ref(false)
+const activeProjectTab = ref<'data' | 'locations' | 'results' | 'devices'>('data')
 
 // ---- C1: Debounce 保存机制 ----
 const saveStatus = ref<'saved' | 'saving' | 'unsaved' | 'error'>('saved')
@@ -92,15 +102,6 @@ const selectableL2Templates = computed(() => {
   const addedIds = new Set(project.value.subdivisions.map(s => s.l2TemplateId))
   return available.filter(t => !addedIds.has(t.id))
 })
-
-function openAddSubDialog() {
-  if (selectableL2Templates.value.length === 0) {
-    ElMessage.warning('没有可添加的 L2 分部表模板')
-    return
-  }
-  selectedL2Id.value = ''
-  showAddSubDialog.value = true
-}
 
 function confirmAddSubdivision() {
   if (!project.value || !selectedL2Id.value) {
@@ -193,38 +194,6 @@ function saveInfoDialog() {
 
 // ---- L1 点检表管理 ----
 
-const availableL1Templates = computed(() => {
-  if (!currentSub.value) return []
-  const l2 = templateStore.l2Templates.find(t => t.id === currentSub.value!.l2TemplateId)
-  if (!l2) return templateStore.l1Templates
-  return templateStore.l1Templates.filter(t => l2.availableL1Ids.includes(t.id))
-})
-
-function addL1ToSubdivision(l1Id: string) {
-  if (!currentSub.value || !project.value) return
-  if (currentSub.value.selectedL1Ids.includes(l1Id)) {
-    ElMessage.warning('该点检表已添加')
-    return
-  }
-  const l1 = templateStore.l1Templates.find(t => t.id === l1Id)
-  if (!l1) return
-
-  currentSub.value.selectedL1Ids.push(l1Id)
-  currentSub.value.inspectionData[l1Id] = {
-    l1TemplateId: l1Id,
-    l1TemplateName: l1.name,
-    checkpoints: [],
-    values: l1.inspectionItems.map(() => []),
-    faultValues: [],
-    notes: '',
-    segmentBreaks: [],
-    rowBreaks: [],
-  }
-  activeL1Id.value = l1Id
-  scheduleSave()
-  ElMessage.success(`已添加「${l1.name}」`)
-}
-
 async function removeL1FromSubdivision(l1Id: string) {
   if (!currentSub.value) return
   const l1Name = currentSub.value.inspectionData[l1Id]?.l1TemplateName || '(未知)'
@@ -255,6 +224,145 @@ function getL1Template(l1Id: string) {
 
 function handleInspectionUpdate(_data: InspectionTableData) {
   scheduleSave()
+}
+
+// ---- 项目级点位清单 ----
+const locationItems = computed(() => {
+  if (!project.value) return []
+  ensureProjectLocationItems(project.value)
+  return project.value.locationItems ?? []
+})
+
+const showAddLocationDialog = ref(false)
+const locationDraft = ref({
+  l2TemplateId: '',
+  l1TemplateId: '',
+  unit: '',
+  quantity: 1,
+  namesText: defaultCheckpointNames(1).join('\n'),
+})
+
+const locationSelectableL2Templates = computed(() => selectableL2Templates.value.concat(
+  templateStore.l2Templates.filter(t => project.value?.subdivisions.some(s => s.l2TemplateId === t.id)),
+).filter((tpl, idx, arr) => arr.findIndex(item => item.id === tpl.id) === idx))
+
+const locationDraftL1Templates = computed(() => {
+  const l2 = templateStore.l2Templates.find(t => t.id === locationDraft.value.l2TemplateId)
+  if (!l2) return []
+  return templateStore.l1Templates.filter(t => l2.availableL1Ids.includes(t.id))
+})
+
+function openAddLocationDialog() {
+  locationDraft.value = {
+    l2TemplateId: '',
+    l1TemplateId: '',
+    unit: '',
+    quantity: 1,
+    namesText: defaultCheckpointNames(1).join('\n'),
+  }
+  showAddLocationDialog.value = true
+}
+
+function syncDraftNames() {
+  locationDraft.value.namesText = normalizeCheckpointNames(
+    splitNames(locationDraft.value.namesText),
+    locationDraft.value.quantity,
+  ).join('\n')
+}
+
+function splitNames(text: string): string[] {
+  return text.split(/[\n,，、]+/).map(v => v.trim()).filter(Boolean)
+}
+
+function locationNamesText(item: ProjectLocationItem): string {
+  return normalizeCheckpointNames(item.checkpointNames ?? [], item.quantity).join('\n')
+}
+
+async function confirmAddLocationItem() {
+  if (!project.value) return
+  const l2 = templateStore.l2Templates.find(t => t.id === locationDraft.value.l2TemplateId)
+  const l1 = templateStore.l1Templates.find(t => t.id === locationDraft.value.l1TemplateId)
+  if (!l2 || !l1) {
+    ElMessage.warning('请选择分部工程和分项点检表')
+    return
+  }
+  const exists = locationItems.value.some(item =>
+    item.l2TemplateId === l2.id && item.l1TemplateId === l1.id
+  )
+  if (exists) {
+    ElMessage.warning('该分部下已存在相同点检表')
+    return
+  }
+  const names = normalizeCheckpointNames(splitNames(locationDraft.value.namesText), locationDraft.value.quantity)
+  const item: ProjectLocationItem = {
+    id: generateId(),
+    l2TemplateId: l2.id,
+    l2TemplateName: l2.name,
+    l1TemplateId: l1.id,
+    l1TemplateName: l1.name,
+    unit: locationDraft.value.unit.trim(),
+    quantity: names.length,
+    checkpointNames: names,
+  }
+  ensureProjectLocationItems(project.value)
+  project.value.locationItems!.push(item)
+  syncLocationItemToProject(project.value, item, l1)
+  showAddLocationDialog.value = false
+  scheduleSave()
+  ElMessage.success('点位清单已添加')
+}
+
+async function handleLocationQuantityChange(item: ProjectLocationItem) {
+  if (!project.value) return
+  const sub = project.value.subdivisions.find(s => s.l2TemplateId === item.l2TemplateId)
+  const data = sub?.inspectionData[item.l1TemplateId]
+  if (data && item.quantity < data.checkpoints.length && hasDataBeyondQuantity(data, item.quantity)) {
+    try {
+      await ElMessageBox.confirm(
+        '减少数量会删除对应点位列及已填写数据，确定继续？',
+        '删除点位确认',
+        { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
+      )
+    } catch {
+      item.quantity = data.checkpoints.length
+      item.checkpointNames = data.checkpoints.map(cp => cp.name)
+      return
+    }
+  }
+  syncProjectLocationItem(item)
+}
+
+function handleLocationNamesChange(item: ProjectLocationItem, text: string) {
+  item.checkpointNames = normalizeCheckpointNames(splitNames(text), item.quantity)
+  syncProjectLocationItem(item)
+}
+
+function syncProjectLocationItem(item: ProjectLocationItem) {
+  if (!project.value) return
+  const l1 = templateStore.l1Templates.find(t => t.id === item.l1TemplateId)
+  if (!l1) return
+  item.checkpointNames = normalizeCheckpointNames(item.checkpointNames ?? [], item.quantity)
+  syncLocationItemToProject(project.value, item, l1)
+  scheduleSave()
+}
+
+async function removeLocationItem(item: ProjectLocationItem) {
+  if (!project.value) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除「${item.l1TemplateName}」的点位清单？对应点检表及已填写数据会一起删除。`,
+      '删除点位清单确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  removeLocationItemFromProject(project.value, item)
+  if (activeL1Id.value === item.l1TemplateId) {
+    activeL1Id.value = currentSub.value?.selectedL1Ids[0] ?? null
+  }
+  scheduleSave()
+  ElMessage.success('点位清单已删除')
 }
 
 // --- L2 模板的扣分项 ---
@@ -315,6 +423,14 @@ const calcPreview = computed(() =>
   project.value ? buildProjectCalcPreview(project.value, templateStore.l1Templates) : null
 )
 
+const resultRows = computed(() =>
+  project.value ? buildResultListRows(project.value, templateStore.l1Templates) : []
+)
+
+const deviceRows = computed(() =>
+  project.value ? buildDeviceListRows(project.value, templateStore.l1Templates, templateStore.deviceItems) : []
+)
+
 // ---- 初始化 ----
 onMounted(async () => {
   await Promise.all([projectStore.loadProjects(), templateStore.loadAll()])
@@ -336,6 +452,10 @@ watch(currentSub, sub => {
   if (activeL1Id.value && sub.selectedL1Ids.includes(activeL1Id.value)) return
   activeL1Id.value = sub.selectedL1Ids[0] ?? null
 }, { immediate: true })
+
+watch(() => locationDraft.value.l2TemplateId, () => {
+  locationDraft.value.l1TemplateId = ''
+})
 </script>
 
 <template>
@@ -376,6 +496,14 @@ watch(currentSub, sub => {
         <span class="info-edit-hint">编辑</span>
       </div>
 
+      <div class="project-tabs">
+        <button :class="{ active: activeProjectTab === 'data' }" @click="activeProjectTab = 'data'">数据录入</button>
+        <button :class="{ active: activeProjectTab === 'locations' }" @click="activeProjectTab = 'locations'">点位清单</button>
+        <button :class="{ active: activeProjectTab === 'results' }" @click="activeProjectTab = 'results'">结果清单</button>
+        <button :class="{ active: activeProjectTab === 'devices' }" @click="activeProjectTab = 'devices'">设备清单</button>
+      </div>
+
+      <template v-if="activeProjectTab === 'data'">
       <!-- 分部 Tab 导航 -->
       <div class="sub-tabs">
         <div class="sub-tabs-list">
@@ -396,9 +524,9 @@ watch(currentSub, sub => {
               @click.stop="removeSubdivision(idx)"
             />
           </div>
-          <div class="sub-tab add-tab" @click="openAddSubDialog">
+          <div class="sub-tab add-tab" @click="activeProjectTab = 'locations'">
             <el-icon><Plus /></el-icon>
-            <span>添加分部</span>
+            <span>在点位清单维护</span>
           </div>
         </div>
       </div>
@@ -413,27 +541,15 @@ watch(currentSub, sub => {
         <!-- L1 点检表选择区 -->
         <div class="l1-selector">
           <div class="selector-header">
-            <span>添加点检表</span>
-            <el-select
-              placeholder="选择点检表模板..."
-              size="small"
-              style="width: 220px"
-              @change="(val: string) => addL1ToSubdivision(val)"
-            >
-              <el-option
-                v-for="tpl in availableL1Templates.filter(t => !currentSub!.selectedL1Ids.includes(t.id))"
-                :key="tpl.id"
-                :label="tpl.name"
-                :value="tpl.id"
-              />
-            </el-select>
+            <span>项目结构和点位统一在「点位清单」页维护</span>
+            <el-button size="small" @click="activeProjectTab = 'locations'">打开点位清单</el-button>
           </div>
         </div>
 
         <!-- L1 点检表数据录入区 -->
         <div class="inspection-tables-area">
           <div v-if="currentSub.selectedL1Ids.length === 0" class="no-l1-hint">
-            <p>请从上方下拉菜单选择点检表模板，开始数据录入</p>
+            <p>当前分部暂无点检表，请先在点位清单页添加点位</p>
           </div>
           <template v-else>
             <div class="l1-tabs">
@@ -499,8 +615,91 @@ watch(currentSub, sub => {
       <div v-else class="empty-state">
         <svg class="empty-icon-svg" viewBox="0 0 48 48" fill="none"><path d="M4 12a3 3 0 013-3h12l3 4h14a3 3 0 013 3v17a3 3 0 01-3 3H7a3 3 0 01-3-3V12z" stroke="currentColor" stroke-width="2"/></svg>
         <h3>暂无分部</h3>
-        <p>点击「添加分部」开始配置项目结构</p>
-        <el-button type="primary" :icon="Plus" @click="openAddSubDialog" style="margin-top: 12px" size="small">添加分部</el-button>
+        <p>请先在点位清单页选择分部、点检表并生成点位</p>
+        <el-button type="primary" :icon="Plus" @click="activeProjectTab = 'locations'" style="margin-top: 12px" size="small">打开点位清单</el-button>
+      </div>
+      </template>
+
+      <div v-else-if="activeProjectTab === 'locations'" class="panel-section">
+        <div class="panel-header">
+          <div>
+            <h3>点位清单</h3>
+            <p>点位清单是项目结构和 L1 检查点列的主数据源。</p>
+          </div>
+          <el-button type="primary" :icon="Plus" size="small" @click="openAddLocationDialog">新增点检表</el-button>
+        </div>
+        <el-table :data="locationItems" border size="small" row-key="id">
+          <el-table-column type="index" label="#" width="56" />
+          <el-table-column prop="l2TemplateName" label="分部工程" min-width="150" />
+          <el-table-column prop="l1TemplateName" label="分项点检表" min-width="170" />
+          <el-table-column label="单位" width="110">
+            <template #default="{ row }">
+              <el-input v-model="row.unit" size="small" @change="syncProjectLocationItem(row)" />
+            </template>
+          </el-table-column>
+          <el-table-column label="数量" width="120">
+            <template #default="{ row }">
+              <el-input-number
+                v-model="row.quantity"
+                :min="0"
+                :max="999"
+                size="small"
+                controls-position="right"
+                @change="() => handleLocationQuantityChange(row)"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="点位名称" min-width="280">
+            <template #default="{ row }">
+              <el-input
+                :model-value="locationNamesText(row)"
+                type="textarea"
+                :rows="2"
+                size="small"
+                @change="(val: string) => handleLocationNamesChange(row, val)"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="90" fixed="right">
+            <template #default="{ row }">
+              <el-button type="danger" text size="small" @click="removeLocationItem(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div v-else-if="activeProjectTab === 'results'" class="panel-section">
+        <div class="panel-header">
+          <div>
+            <h3>结果清单</h3>
+            <p>故障台数按“是否故障=是”的有效点位统计。</p>
+          </div>
+        </div>
+        <el-table :data="resultRows" border size="small">
+          <el-table-column type="index" label="序号" width="70" />
+          <el-table-column prop="subdivisionName" label="分部工程" min-width="160" />
+          <el-table-column prop="l1Name" label="分项工程" min-width="180" />
+          <el-table-column prop="faultCount" label="故障台数" width="110" />
+          <el-table-column prop="passRate" label="设备完好率" width="130" />
+        </el-table>
+      </div>
+
+      <div v-else class="panel-section">
+        <div class="panel-header">
+          <div>
+            <h3>设备清单</h3>
+            <p>检查项关联设备且该行存在非 “/” 内容时进入清单，数量固定为 1。</p>
+          </div>
+        </div>
+        <el-table :data="deviceRows" border size="small">
+          <el-table-column type="index" label="序号" width="70" />
+          <el-table-column prop="device.name" label="设备名称" min-width="160" />
+          <el-table-column prop="device.model" label="设备型号" min-width="140" />
+          <el-table-column prop="device.unit" label="单位" width="90" />
+          <el-table-column prop="quantity" label="数量" width="90" />
+          <el-table-column prop="device.purpose" label="设备用途" min-width="180" />
+          <el-table-column prop="sourceL1Name" label="来源点检表" min-width="160" />
+        </el-table>
       </div>
     </template>
 
@@ -525,6 +724,58 @@ watch(currentSub, sub => {
       <template #footer>
         <el-button @click="showAddSubDialog = false">取消</el-button>
         <el-button type="primary" @click="confirmAddSubdivision">添加分部</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showAddLocationDialog" title="新增点位清单" width="720px" :close-on-click-modal="false" destroy-on-close>
+      <div class="form-section">
+        <div class="form-row">
+          <div class="form-field">
+            <label>分部工程 <span class="required">*</span></label>
+            <el-select v-model="locationDraft.l2TemplateId" placeholder="请选择分部工程" filterable style="width: 100%">
+              <el-option v-for="tpl in locationSelectableL2Templates" :key="tpl.id" :label="tpl.name" :value="tpl.id" />
+            </el-select>
+          </div>
+          <div class="form-field">
+            <label>分项点检表 <span class="required">*</span></label>
+            <el-select v-model="locationDraft.l1TemplateId" placeholder="请选择点检表" filterable style="width: 100%">
+              <el-option v-for="tpl in locationDraftL1Templates" :key="tpl.id" :label="tpl.name" :value="tpl.id" />
+            </el-select>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top: 12px">
+          <div class="form-field">
+            <label>单位</label>
+            <el-input v-model="locationDraft.unit" placeholder="台/套" />
+          </div>
+          <div class="form-field">
+            <label>数量</label>
+            <el-input-number
+              v-model="locationDraft.quantity"
+              :min="0"
+              :max="999"
+              controls-position="right"
+              style="width: 100%"
+              @change="syncDraftNames"
+            />
+          </div>
+        </div>
+        <div class="form-row" style="margin-top: 12px">
+          <div class="form-field full">
+            <label>点位名称</label>
+            <el-input
+              v-model="locationDraft.namesText"
+              type="textarea"
+              :rows="4"
+              placeholder="每行一个点位名称；留空按地点1、地点2生成"
+              @blur="syncDraftNames"
+            />
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showAddLocationDialog = false">取消</el-button>
+        <el-button type="primary" @click="confirmAddLocationItem">添加</el-button>
       </template>
     </el-dialog>
 
@@ -576,7 +827,7 @@ watch(currentSub, sub => {
             <strong class="calc-summary-value">{{ calcPreview.faultCount }}</strong>
           </div>
           <div class="calc-summary-card">
-            <span class="calc-summary-label">合格率</span>
+            <span class="calc-summary-label">设备完好率</span>
             <strong class="calc-summary-value">{{ calcPreview.passRate }}</strong>
           </div>
           <div class="calc-summary-card">
@@ -602,7 +853,7 @@ watch(currentSub, sub => {
             <div class="calc-subsection-summary">
               <span>总量 {{ sub.totalCount }}</span>
               <span>故障 {{ sub.faultCount }}</span>
-              <span>合格率 {{ sub.passRate }}</span>
+              <span>设备完好率 {{ sub.passRate }}</span>
             </div>
           </div>
 
@@ -617,7 +868,7 @@ watch(currentSub, sub => {
             <el-table-column prop="name" label="设施" min-width="220" />
             <el-table-column prop="totalCount" label="总量" width="96" />
             <el-table-column prop="faultCount" label="故障数量" width="110" />
-            <el-table-column prop="passRate" label="合格率" width="110" />
+            <el-table-column prop="passRate" label="设备完好率" width="120" />
           </el-table>
         </div>
       </div>
@@ -654,6 +905,56 @@ watch(currentSub, sub => {
 .info-item strong { color: var(--text-primary); margin-right: 4px; }
 .info-edit-hint { font-size: 10px; color: var(--text-tertiary); opacity: 0; transition: opacity var(--transition-fast); position: absolute; right: 12px; top: 50%; transform: translateY(-50%); }
 .info-bar:hover .info-edit-hint { opacity: 1; }
+
+.project-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: var(--space-md);
+  border-bottom: 1px solid var(--border-color);
+}
+.project-tabs button {
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.project-tabs button:hover {
+  color: var(--color-primary);
+  background: var(--bg-card-hover);
+}
+.project-tabs button.active {
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary);
+}
+
+.panel-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+}
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
+}
+.panel-header h3 {
+  font-size: 15px;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+.panel-header p {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
 
 /* 分部 Tab */
 .sub-tabs { margin-bottom: var(--space-md); }

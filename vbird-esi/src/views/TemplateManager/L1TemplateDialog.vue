@@ -8,6 +8,7 @@ import { ElMessage } from 'element-plus'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import type { L1Template, InspectionItem, NumericOperator, NumericJoin, ValidationType } from '@/types'
 import { generateId, nowISO } from '@/utils/id'
+import { useTemplateStore } from '@/stores/templateStore'
 
 const props = defineProps<{
   visible: boolean
@@ -19,6 +20,8 @@ const emit = defineEmits<{
   (e: 'save', template: L1Template): void
 }>()
 
+const templateStore = useTemplateStore()
+
 const dialogVisible = computed({
   get: () => props.visible,
   set: (val) => emit('update:visible', val),
@@ -28,6 +31,7 @@ const dialogVisible = computed({
 const formData = ref({
   name: '',
   facilityName: '',
+  isCritical: false,
   autoCutEnabled: true,
 })
 
@@ -45,12 +49,13 @@ watch(() => props.visible, (val) => {
       formData.value = {
         name: props.template.name,
         facilityName: props.template.facilityName,
+        isCritical: props.template.isCritical ?? false,
         autoCutEnabled: props.template.autoCutEnabled ?? true,
       }
       inspectionItems.value = JSON.parse(JSON.stringify(props.template.inspectionItems))
     } else {
       // 新建模式：重置
-      formData.value = { name: '', facilityName: '', autoCutEnabled: true }
+      formData.value = { name: '', facilityName: '', isCritical: false, autoCutEnabled: true }
       inspectionItems.value = []
     }
   }
@@ -147,6 +152,7 @@ function handleSave() {
     id: props.template?.id ?? generateId(),
     name: formData.value.name.trim(),
     facilityName: formData.value.facilityName.trim(),
+    isCritical: formData.value.isCritical,
     createdAt: props.template?.createdAt ?? now,
     updatedAt: now,
     columns: {
@@ -256,6 +262,10 @@ function onTypeChange(item: InspectionItem) {
           <el-input v-model="formData.facilityName" placeholder="显示在表头（可选）" />
         </div>
         <div class="form-field">
+          <label>重点设备</label>
+          <el-switch v-model="formData.isCritical" active-text="是" inactive-text="否" />
+        </div>
+        <div class="form-field">
           <label>自动切割 (A4)</label>
           <el-switch v-model="formData.autoCutEnabled" active-text="开启" inactive-text="关闭" />
         </div>
@@ -280,6 +290,7 @@ function onTypeChange(item: InspectionItem) {
           <span class="col-seq">#</span>
           <span class="col-group">检查项目名称</span>
           <span class="col-req">技术要求</span>
+          <span class="col-device">关联设备</span>
           <span class="col-options">下拉选项</span>
           <span class="col-type">类型</span>
           <span class="col-action">操作</span>
@@ -303,6 +314,21 @@ function onTypeChange(item: InspectionItem) {
               placeholder="技术要求描述"
               size="small"
             />
+            <el-select
+              v-model="item.deviceId"
+              class="col-device"
+              size="small"
+              clearable
+              filterable
+              placeholder="不关联"
+            >
+              <el-option
+                v-for="device in templateStore.deviceItems"
+                :key="device.id"
+                :label="device.name"
+                :value="device.id"
+              />
+            </el-select>
             <span class="col-options fixed-options">
               {{ item.validationType === 'text' ? '符合, 不符合, /' : '-' }}
             </span>
@@ -482,6 +508,11 @@ function onTypeChange(item: InspectionItem) {
 .col-req {
   flex: 3;
   min-width: 0;
+}
+
+.col-device {
+  width: 130px;
+  flex-shrink: 0;
 }
 
 .col-options {

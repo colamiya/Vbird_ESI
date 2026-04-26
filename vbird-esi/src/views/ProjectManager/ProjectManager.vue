@@ -6,12 +6,19 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { Plus, Delete, Edit, Search, Download } from '@element-plus/icons-vue'
+import { Plus, Delete, Edit, Search, Download, Upload } from '@element-plus/icons-vue'
 import { useProjectStore } from '@/stores/projectStore'
 import { useTemplateStore } from '@/stores/templateStore'
-import type { Project } from '@/types'
+import type { Project, ProjectLocationItem } from '@/types'
 import { generateId, nowISO } from '@/utils/id'
 import { exportProjectToExcel } from '@/utils/excelExport'
+import { exportFullBackupPackage, importFullBackupPackage } from '@/utils/backup'
+import {
+  defaultCheckpointNames,
+  ensureProjectLocationItems,
+  normalizeCheckpointNames,
+  syncLocationItemToProject,
+} from '@/utils/projectStructure'
 
 const router = useRouter()
 const projectStore = useProjectStore()
@@ -31,6 +38,7 @@ const filteredProjects = computed(() => {
 
 // ---- 创建项目对话框 ----
 const showCreateDialog = ref(false)
+const createStep = ref<'basic' | 'wizard'>('basic')
 const createForm = ref({
   name: '',
   companyName: '',
@@ -40,9 +48,57 @@ const createForm = ref({
   l3TemplateId: '',
 })
 
+interface WizardRow {
+  key: string
+  selected: boolean
+  l2TemplateId: string
+  l2TemplateName: string
+  l1TemplateId: string
+  l1TemplateName: string
+  unit: string
+  quantity: number
+  namesText: string
+}
+
+const wizardRows = ref<WizardRow[]>([])
+
 function openCreateDialog() {
   createForm.value = { name: '', companyName: '', ownerUnit: '', implementUnit: '', supervisorUnit: '', l3TemplateId: '' }
+  createStep.value = 'basic'
+  wizardRows.value = []
   showCreateDialog.value = true
+}
+
+function prepareProjectWizard() {
+  if (!createForm.value.name.trim()) {
+    ElMessage.warning('请输入项目名称')
+    return
+  }
+  const availableL2Ids = createForm.value.l3TemplateId
+    ? (templateStore.l3Templates.find(t => t.id === createForm.value.l3TemplateId)?.availableL2Ids ?? [])
+    : templateStore.l2Templates.map(t => t.id)
+
+  const rows: WizardRow[] = []
+  templateStore.l2Templates
+    .filter(l2 => availableL2Ids.includes(l2.id))
+    .forEach(l2 => l2.availableL1Ids.forEach(l1Id => {
+      const l1 = templateStore.l1Templates.find(t => t.id === l1Id)
+      if (!l1) return
+      rows.push({
+        key: `${l2.id}:${l1.id}`,
+        selected: false,
+        l2TemplateId: l2.id,
+        l2TemplateName: l2.name,
+        l1TemplateId: l1.id,
+        l1TemplateName: l1.name,
+        unit: '',
+        quantity: 1,
+        namesText: defaultCheckpointNames(1).join('\n'),
+      })
+    }))
+  wizardRows.value = rows
+
+  createStep.value = 'wizard'
 }
 
 async function handleCreateProject() {
@@ -64,12 +120,35 @@ async function handleCreateProject() {
       supervisorUnit: createForm.value.supervisorUnit.trim(),
     },
     l3TemplateId: createForm.value.l3TemplateId,
+    dataVersion: 2,
+    locationItems: [],
     subdivisions: [],
+  }
+
+  ensureProjectLocationItems(project)
+
+  for (const row of wizardRows.value.filter(r => r.selected)) {
+    const l1 = templateStore.l1Templates.find(t => t.id === row.l1TemplateId)
+    if (!l1) continue
+    const names = normalizeCheckpointNames(splitNames(row.namesText), row.quantity)
+    const item: ProjectLocationItem = {
+      id: generateId(),
+      l2TemplateId: row.l2TemplateId,
+      l2TemplateName: row.l2TemplateName,
+      l1TemplateId: row.l1TemplateId,
+      l1TemplateName: row.l1TemplateName,
+      unit: row.unit.trim(),
+      quantity: names.length,
+      checkpointNames: names,
+    }
+    project.locationItems!.push(item)
+    syncLocationItemToProject(project, item, l1)
   }
 
   await projectStore.saveProject(project)
   showCreateDialog.value = false
   ElMessage.success('项目已创建')
+  openProject(project)
 }
 
 async function handleDeleteProject(project: Project) {
@@ -93,6 +172,7 @@ async function handleExportExcel(project: Project) {
       project,
       templateStore.l1Templates,
       templateStore.l2Templates,
+      templateStore.deviceItems,
     )
     if (ok) {
       ElMessage.success('Excel 导出成功')
@@ -103,6 +183,48 @@ async function handleExportExcel(project: Project) {
   } finally {
     exportingId.value = null
   }
+}
+
+async function handleExportBackup() {
+  try {
+    const path = await exportFullBackupPackage()
+    if (path) ElMessage.success('系统数据已导出')
+  } catch (e: any) {
+    console.error('导出系统数据失败:', e)
+    ElMessage.error(`导出系统数据失败: ${e.message || e}`)
+  }
+}
+
+async function handleImportBackup() {
+  try {
+    await ElMessageBox.confirm(
+      '导入会整体替换当前模板、项目和设备库数据，现有数据将被清空且不会自动保留恢复备份。确定继续？',
+      '导入系统数据确认',
+      { type: 'warning', confirmButtonText: '确认导入', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const ok = await importFullBackupPackage()
+    if (!ok) return
+    await Promise.all([projectStore.loadProjects(), templateStore.loadAll()])
+    ElMessage.success('系统数据已导入')
+  } catch (e: any) {
+    console.error('导入系统数据失败:', e)
+    ElMessage.error(`导入系统数据失败: ${e.message || e}`)
+  }
+}
+
+function splitNames(text: string): string[] {
+  return text
+    .split(/[\n,，、]+/)
+    .map(v => v.trim())
+    .filter(Boolean)
+}
+
+function syncWizardNames(row: WizardRow) {
+  row.namesText = normalizeCheckpointNames(splitNames(row.namesText), row.quantity).join('\n')
 }
 
 // ---- 格式化时间 ----
@@ -135,7 +257,11 @@ onMounted(() => {
         <h1 class="page-title">项目管理</h1>
         <p class="page-desc">管理工程安全检查项目，进行数据采集与导出</p>
       </div>
-      <el-button type="primary" :icon="Plus" size="large" @click="openCreateDialog">新建项目</el-button>
+      <div class="page-actions">
+        <el-button :icon="Upload" size="large" @click="handleImportBackup">导入系统数据</el-button>
+        <el-button :icon="Download" size="large" @click="handleExportBackup">导出系统数据</el-button>
+        <el-button type="primary" :icon="Plus" size="large" @click="openCreateDialog">新建项目</el-button>
+      </div>
     </div>
 
     <!-- 统计卡片 -->
@@ -210,8 +336,8 @@ onMounted(() => {
     </div>
 
     <!-- 创建项目对话框 -->
-    <el-dialog v-model="showCreateDialog" title="新建项目" width="600px" :close-on-click-modal="false">
-      <div class="form-section">
+    <el-dialog v-model="showCreateDialog" title="新建项目" width="980px" :close-on-click-modal="false">
+      <div v-if="createStep === 'basic'" class="form-section">
         <div class="form-row">
           <div class="form-field full">
             <label>项目名称 <span class="required">*</span></label>
@@ -247,9 +373,58 @@ onMounted(() => {
           </div>
         </div>
       </div>
+      <div v-else class="wizard-section">
+        <div class="wizard-toolbar">
+          <div>
+            <h4>初始化点位清单</h4>
+            <p>默认不选择。勾选需要纳入项目的 L1 点检表，并填写单位、数量和点位名称。</p>
+          </div>
+          <span class="meta-info">已选 {{ wizardRows.filter(r => r.selected).length }} 项</span>
+        </div>
+        <el-table :data="wizardRows" border size="small" max-height="460" row-key="key">
+          <el-table-column width="54" align="center">
+            <template #default="{ row }">
+              <el-checkbox v-model="row.selected" />
+            </template>
+          </el-table-column>
+          <el-table-column prop="l2TemplateName" label="分部工程" min-width="140" />
+          <el-table-column prop="l1TemplateName" label="分项点检表" min-width="160" />
+          <el-table-column label="单位" width="110">
+            <template #default="{ row }">
+              <el-input v-model="row.unit" size="small" placeholder="台/套" />
+            </template>
+          </el-table-column>
+          <el-table-column label="数量" width="110">
+            <template #default="{ row }">
+              <el-input-number
+                v-model="row.quantity"
+                :min="0"
+                :max="999"
+                size="small"
+                controls-position="right"
+                @change="() => syncWizardNames(row)"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="点位名称" min-width="260">
+            <template #default="{ row }">
+              <el-input
+                v-model="row.namesText"
+                type="textarea"
+                :rows="2"
+                size="small"
+                placeholder="每行一个点位名称；留空按地点1、地点2生成"
+                @blur="syncWizardNames(row)"
+              />
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
       <template #footer>
         <el-button @click="showCreateDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleCreateProject">创建项目</el-button>
+        <el-button v-if="createStep === 'wizard'" @click="createStep = 'basic'">上一步</el-button>
+        <el-button v-if="createStep === 'basic'" type="primary" @click="prepareProjectWizard">下一步</el-button>
+        <el-button v-else type="primary" @click="handleCreateProject">创建项目</el-button>
       </template>
     </el-dialog>
   </div>
@@ -258,6 +433,7 @@ onMounted(() => {
 <style scoped>
 .project-manager { max-width: min(1600px, 100%); margin: 0 auto; }
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-lg); }
+.page-actions { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; justify-content: flex-end; }
 .page-title { font-size: 22px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; margin-bottom: 2px; }
 .page-desc { color: var(--text-secondary); font-size: 13px; }
 
@@ -305,4 +481,8 @@ onMounted(() => {
 .form-field.full { grid-column: 1 / -1; }
 .form-field label { font-size: 12px; color: var(--text-secondary); }
 .required { color: var(--color-danger); }
+.wizard-section { display: flex; flex-direction: column; gap: var(--space-sm); }
+.wizard-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-md); }
+.wizard-toolbar h4 { font-size: 15px; color: var(--text-primary); margin: 0 0 4px; }
+.wizard-toolbar p { font-size: 12px; color: var(--text-secondary); margin: 0; }
 </style>

@@ -2,6 +2,66 @@
 
 > 追加式修改日志。只允许在顶部新增，不允许覆盖或删除历史。
 
+## 2026-04-26
+
+### Excel 导出版式配置集中化
+- **需求点**: 用户要求将所有 Excel 页面列宽、比例、打印设置等集中到一个位置，便于统一调整。
+- **路径**:
+  - `vbird-esi/src/config/excelLayout.ts`
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/src/utils/l1PrintLayout.ts`
+- **结果**:
+  - 新增 `excelLayout.ts`，集中维护 L1/L2/L3/清单/封面页的列宽、行高、页边距、缩放、打印方向、颜色、边框与 L1 前三列比例。
+  - `l1PrintLayout.ts` 改为读取 `L1_PRINT_LAYOUT.fixedColumnRatio`，不再在分页工具内硬编码 `1.4:3:5.6`。
+  - `excelExport.ts` 删除本地 `LAYOUT_CONFIG` 常量，统一从 `EXCEL_LAYOUT_CONFIG` 读取版式参数。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+
+### Excel 前置清单与备注键盘删除细节整改
+- **需求点**: 对齐 `other/20260425-New/表格模板1.xlsx` 的前置清单版式，并修复 L1 备注框无法用键盘删除的问题。
+- **路径**:
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/src/utils/l1PrintLayout.ts`
+  - `vbird-esi/src/components/InspectionTable.vue`
+- **结果**:
+  - `检查结果计算表` 实际打印区域限制为 `A:E`，标题与底部行不再占用 F 列。
+  - `点位清单表` 改为 A-J 横向 A4，分部独占行，检测部位每行 6 个，超出自动拆行并纵向合并 A-D。
+  - `结果清单` 增加公司/标题头，同分部工程纵向合并。
+  - `设备清单` 增加公司/标题头，保持 A-F 样表列结构。
+  - L1 点检表动态列宽微调为序号稍宽、技术要求稍窄。
+  - L1 备注 `textarea` 阻止键盘事件冒泡，`Delete` / `Backspace` 不再触发表格清空选区。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）
+  - `git diff --check` 通过（仅 CRLF 提示）
+
+### 20260425 新需求整改实现
+- **需求点**: 落地 `other/20260425-New` 中确认后的新需求：项目级点位清单、结果清单、设备清单、设备库、重点设备、设备完好率、全量系统数据导入导出。
+- **路径**:
+  - `vbird-esi/src/types/device.ts`
+  - `vbird-esi/src/types/project.ts`
+  - `vbird-esi/src/types/template.ts`
+  - `vbird-esi/src/utils/projectStructure.ts`
+  - `vbird-esi/src/utils/projectCalc.ts`
+  - `vbird-esi/src/utils/backup.ts`
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/src/views/ProjectManager/ProjectManager.vue`
+  - `vbird-esi/src/views/ProjectEditor/ProjectEditor.vue`
+  - `vbird-esi/src/views/TemplateManager/TemplateManager.vue`
+  - `vbird-esi/src/views/TemplateManager/L1TemplateDialog.vue`
+  - `vbird-esi/src/components/InspectionTable.vue`
+- **结果**:
+  - 新建项目改为 L3 后建项向导，默认空选 L2/L1，并按 L1 初始化单位、数量、点位名称。
+  - 项目编辑页新增 `数据录入 / 点位清单 / 结果清单 / 设备清单` 四个项目内 Tab，点位清单成为项目结构主数据源。
+  - 旧项目加载时自动从已有 L1 检查点反推项目级点位清单。
+  - L1 模板支持重点设备字段与检查项设备关联；模板管理新增检查设备库。
+  - 计算口径改为有效点位、真实故障数量与重点设备最低项规则，术语统一为设备完好率。
+  - Excel 导出前置输出 `检查结果计算表 / 点位清单表 / 结果清单 / 设备清单`，并净化非法 Sheet 名。
+  - 系统数据导入导出采用单 JSON 全量备份包；导入时整体替换现有模板、项目、设备库。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）
+
 ## 2026-04-18
 
 ### 18:47:58 — 恢复 L1 页型动态列宽
