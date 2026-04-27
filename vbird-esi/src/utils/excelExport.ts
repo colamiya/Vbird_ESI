@@ -243,7 +243,7 @@ function writeL1SegmentBody(
   setCell(sheet, r, rc,  '技术要求',   true, fnt.l1HeaderSize, 'center')
   setCell(sheet, r, dc, '测试点单项结果', true, fnt.l1HeaderSize, 'center')
   sheet.mergeCells(r, dc, r, finalSummaryCol ? dc + cfg.maxLocPerSeg - 1 : segmentEndCol)
-  if (finalSummaryCol) setCell(sheet, r, summaryCol, '单项检测结果汇总', true, fnt.l1HeaderSize, 'center')
+  if (finalSummaryCol) setCell(sheet, r, summaryCol, '汇总列', true, fnt.l1HeaderSize, 'center')
 
   sheet.mergeCells(r, sc, r + 1, sc)
   sheet.mergeCells(r, ic, r + 1, ic)

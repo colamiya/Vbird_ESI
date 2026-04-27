@@ -32,9 +32,9 @@ export const L1_PRINT_LAYOUT = {
   locColWNoSum: 10,
   summaryColW: 10,
   fixedColumnRatio: {
-    seq: 1.4,
+    seq: 1.6,
     item: 3,
-    req: 5.6,
+    req: 5.4,
   },
   titleRowH: 20,
   headerRow1H: 22,

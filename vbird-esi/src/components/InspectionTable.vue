@@ -103,14 +103,7 @@ function normalizedHeaderSel() {
 function isInSelection(row: number, col: number) {
   if (activeRegion.value !== 'data') return false
   const s = normalizedSel(); if (!s) return false
-  if (row < s.r1 || row > s.r2 || col < s.c1 || col > s.c2) return false
-  // 段内限制：选区不跨越段边界
-  if (selAnchor.value) {
-    const anchorSeg = findSegmentByCol(selAnchor.value.col)
-    const cellSeg = findSegmentByCol(col)
-    if (anchorSeg !== -1 && cellSeg !== -1 && anchorSeg !== cellSeg) return false
-  }
-  return true
+  return row >= s.r1 && row <= s.r2 && col >= s.c1 && col <= s.c2
 }
 function isFaultSelected(cpIdx: number) {
   if (activeRegion.value !== 'fault') return false
@@ -428,11 +421,6 @@ async function pasteSelection() {
   const anchRow = selAnchor.value.row
   const anchCol = selAnchor.value.col
   pushUndoSnapshot()
-  // BUG-8: 获取锚点所在段的列边界，粘贴不允许跨段写入
-  const anchSegIdx = findSegmentByCol(anchCol)
-  const anchSegEndCol = anchSegIdx >= 0
-    ? (layoutGrid.value.flatMap(r => r).find(s => s.index === anchSegIdx)?.endCol ?? maxC)
-    : maxC
 
   if (isOneCell) {
     const val = clipRows[0][0] ?? null
@@ -440,8 +428,7 @@ async function pasteSelection() {
     const c1 = s?.c1 ?? anchCol, c2 = s?.c2 ?? anchCol
     for (let r = r1; r <= r2; r++) {
       ensureRow(r)
-      // BUG-8: 段内限制，c2 不超出锚点所在段
-      for (let c = c1; c <= Math.min(c2, anchSegEndCol) && c <= maxC; c++) props.data.values[r][c] = val
+      for (let c = c1; c <= c2 && c <= maxC; c++) props.data.values[r][c] = val
     }
     emitUpdate(); ElMessage.success(`已粘贴到 ${r2-r1+1}×${c2-c1+1} 区域`)
   } else {
@@ -454,7 +441,6 @@ async function pasteSelection() {
       for (let ci = 0; ci < rowData.length; ci++) {
         const c = anchCol + ci
         if (c > maxC) break
-        if (c > anchSegEndCol) break  // BUG-8: 超出锚点段边界时停止（不跨段）
         props.data.values[r][c] = rowData[ci]
         pastedCols = Math.max(pastedCols, ci + 1)
       }
@@ -737,15 +723,6 @@ const layoutGrid = computed((): SegmentInfo[][] => {
 
 function segCols(seg: SegmentInfo): number[] {
   return Array.from({ length: seg.endCol - seg.startCol + 1 }, (_, i) => seg.startCol + i)
-}
-
-function findSegmentByCol(col: number): number {
-  for (const row of layoutGrid.value) {
-    for (const seg of row) {
-      if (col >= seg.startCol && col <= seg.endCol) return seg.index
-    }
-  }
-  return -1
 }
 
 const lastGridRowTotalDataCols = computed((): number => {

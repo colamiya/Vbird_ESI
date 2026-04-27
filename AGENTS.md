@@ -159,7 +159,7 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 - **Undo 栈**：`pushUndoSnapshot()` 保存深拷贝，最多 50 步
 - **数据流**：通过 `emit('update', props.data)` + nextTick 防抖向父组件通信。注意：组件直接 mutate `props.data` 属性（Vue 反模式但可工作），禁止改为 shallowRef 传入
 - **el-dialog 嵌套**：在对话框内使用此组件时，**必须用 `append-to-body`**，**禁止用 `destroy-on-close`**（会导致 overlay 残留），用 `v-if` 控制内容渲染
-- **段内限制**：选区、粘贴（Ctrl+V）均限制在当前 `segmentBreaks` 段内，不可跨段操作
+- **跨段交互**：`segmentBreaks` 只影响 UI 分段显示和 Excel 导出布局；数据格区域、检查点表头、故障行均允许跨分割块拖选、复制、粘贴、删除和拖拽填充
 - **右键菜单**：`ctxMenu` ref + `_ctxHideHandler` 变量，`showCtxMenu/hideCtxMenu` 管理生命周期，使用 `<Teleport to="body">` 避免被 `overflow:hidden` 裁剪。`onBeforeUnmount` 中必须清理 `_ctxHideHandler`
 - **@mousedown.left.exact**：列头 `<th>` 使用 `.left.exact` 修饰符（而非 `.exact`），避免右键触发拖拽
 

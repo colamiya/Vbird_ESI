@@ -4,6 +4,26 @@
 
 ## 2026-04-26
 
+### L1 点检表跨分割块交互统一
+- **需求点**: 用户反馈数据格区域无法像地点行、是否故障行一样跨 6 地点分割块拖动选择，要求数据格跨分割块选择、复制、粘贴、删除和拖拽填充行为统一。
+- **路径**:
+  - `vbird-esi/src/components/InspectionTable.vue`
+  - `AGENTS.md`
+  - `ONGOING.md`
+- **关键函数 / 位置**:
+  - `isInSelection()`
+  - `pasteSelection()`
+  - `applyDragFill()`
+- **结果**:
+  - 移除数据格选中高亮对 `findSegmentByCol()` 的段内过滤，跨段后选区按完整矩形显示。
+  - 移除数据格粘贴时按锚点段末列截断的逻辑，单格广播和 TSV 多格粘贴只按表格边界截断。
+  - 删除不再使用的 `findSegmentByCol()` 辅助函数，避免未使用代码残留。
+  - 保持分割块仅用于 UI 分段显示和 Excel 导出布局；地点行、是否故障行跨段逻辑保持不变。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）
+  - `git diff --check` 通过（仅 CRLF 提示）
+
 ### Excel 导出版式配置集中化
 - **需求点**: 用户要求将所有 Excel 页面列宽、比例、打印设置等集中到一个位置，便于统一调整。
 - **路径**:
