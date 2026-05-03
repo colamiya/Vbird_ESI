@@ -96,7 +96,7 @@ export const EXCEL_LAYOUT_CONFIG = {
   },
 
   l3: {
-    colWidths: [10.63, 35.63, 10.63, 10.63, 14.41],
+    colWidths: [9.5, 31, 9.5, 9.5, 10, 13],
     titleMergeRows: 8,
     subNameBgArgb: 'FFFFC000',
     tableHeaderRow: 9,

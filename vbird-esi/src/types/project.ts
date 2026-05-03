@@ -71,6 +71,8 @@ export interface ProjectSubdivision {
   inspectionData: Record<string, InspectionTableData>
   /** 分部表扣分数据 */
   scoringData: ScoringData
+  /** 总表加权计算使用的分部权值，项目实例中填写 */
+  summaryWeight: number
 }
 
 /** 项目级点位清单条目，是项目结构与 L1 检查点列的主数据源 */

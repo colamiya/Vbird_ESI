@@ -10,6 +10,7 @@ import { Plus, Delete, Edit, Search, Download, Upload } from '@element-plus/icon
 import { useProjectStore } from '@/stores/projectStore'
 import { useTemplateStore } from '@/stores/templateStore'
 import type { Project, ProjectLocationItem } from '@/types'
+import LocationNamesEditor from '@/components/LocationNamesEditor.vue'
 import { generateId, nowISO } from '@/utils/id'
 import { exportProjectToExcel } from '@/utils/excelExport'
 import { exportFullBackupPackage, importFullBackupPackage } from '@/utils/backup'
@@ -17,6 +18,7 @@ import {
   defaultCheckpointNames,
   ensureProjectLocationItems,
   normalizeCheckpointNames,
+  PROJECT_DATA_VERSION,
   syncLocationItemToProject,
 } from '@/utils/projectStructure'
 
@@ -57,7 +59,7 @@ interface WizardRow {
   l1TemplateName: string
   unit: string
   quantity: number
-  namesText: string
+  checkpointNames: string[]
 }
 
 const wizardRows = ref<WizardRow[]>([])
@@ -93,7 +95,7 @@ function prepareProjectWizard() {
         l1TemplateName: l1.name,
         unit: '',
         quantity: 1,
-        namesText: defaultCheckpointNames(1).join('\n'),
+        checkpointNames: defaultCheckpointNames(1),
       })
     }))
   wizardRows.value = rows
@@ -120,7 +122,7 @@ async function handleCreateProject() {
       supervisorUnit: createForm.value.supervisorUnit.trim(),
     },
     l3TemplateId: createForm.value.l3TemplateId,
-    dataVersion: 2,
+    dataVersion: PROJECT_DATA_VERSION,
     locationItems: [],
     subdivisions: [],
   }
@@ -130,7 +132,7 @@ async function handleCreateProject() {
   for (const row of wizardRows.value.filter(r => r.selected)) {
     const l1 = templateStore.l1Templates.find(t => t.id === row.l1TemplateId)
     if (!l1) continue
-    const names = normalizeCheckpointNames(splitNames(row.namesText), row.quantity)
+    const names = normalizeCheckpointNames(row.checkpointNames, row.quantity)
     const item: ProjectLocationItem = {
       id: generateId(),
       l2TemplateId: row.l2TemplateId,
@@ -216,15 +218,18 @@ async function handleImportBackup() {
   }
 }
 
-function splitNames(text: string): string[] {
-  return text
-    .split(/[\n,，、]+/)
-    .map(v => v.trim())
-    .filter(Boolean)
+function syncWizardQuantity(row: WizardRow) {
+  row.checkpointNames = normalizeCheckpointNames(row.checkpointNames, row.quantity)
 }
 
-function syncWizardNames(row: WizardRow) {
-  row.namesText = normalizeCheckpointNames(splitNames(row.namesText), row.quantity).join('\n')
+function handleWizardNamesChange(row: WizardRow, names: string[]) {
+  const next = compactCheckpointNames(names)
+  row.checkpointNames = next
+  row.quantity = next.length
+}
+
+function compactCheckpointNames(names: string[]): string[] {
+  return names.map(name => `${name ?? ''}`.trim()).filter(Boolean)
 }
 
 // ---- 格式化时间 ----
@@ -402,19 +407,16 @@ onMounted(() => {
                 :max="999"
                 size="small"
                 controls-position="right"
-                @change="() => syncWizardNames(row)"
+                @change="() => syncWizardQuantity(row)"
               />
             </template>
           </el-table-column>
-          <el-table-column label="点位名称" min-width="260">
+          <el-table-column label="点位名称" min-width="620">
             <template #default="{ row }">
-              <el-input
-                v-model="row.namesText"
-                type="textarea"
-                :rows="2"
-                size="small"
-                placeholder="每行一个点位名称；留空按地点1、地点2生成"
-                @blur="syncWizardNames(row)"
+              <LocationNamesEditor
+                v-model="row.checkpointNames"
+                :min-rows="1"
+                @change="(names: string[]) => handleWizardNamesChange(row, names)"
               />
             </template>
           </el-table-column>

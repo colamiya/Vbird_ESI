@@ -26,6 +26,8 @@ export interface L1PrintSegmentLayout {
   index: number
   startCol: number
   endCol: number
+  cpIndices: number[]
+  hasSummarySlot: boolean
   pageIndex: number
   notesRowHeight: number
   baseNotesRowHeight: number
@@ -65,6 +67,8 @@ interface SegmentMetric {
   index: number
   startCol: number
   endCol: number
+  cpIndices: number[]
+  hasSummarySlot: boolean
   baseHeight: number
   baseNotesRowHeight: number
   isLastEffectiveSeg: boolean
@@ -73,6 +77,21 @@ interface SegmentMetric {
 export function buildL1PrintPages(
   template: L1Template,
   data: InspectionTableData,
+): L1PrintPageLayout[] {
+  return buildL1PrintPagesCore(template, data, false)
+}
+
+export function buildL1ExportPrintPages(
+  template: L1Template,
+  data: InspectionTableData,
+): L1PrintPageLayout[] {
+  return buildL1PrintPagesCore(template, data, true)
+}
+
+function buildL1PrintPagesCore(
+  template: L1Template,
+  data: InspectionTableData,
+  useLastPageSevenSlots: boolean,
 ): L1PrintPageLayout[] {
   const totalCols = data.checkpoints.length
   if (totalCols <= 0) return []
@@ -103,6 +122,8 @@ export function buildL1PrintPages(
       index: seg.index,
       startCol: seg.startCol,
       endCol: seg.endCol,
+      cpIndices: range(seg.startCol, seg.endCol),
+      hasSummarySlot: isLastEffectiveSeg,
       baseHeight: staticHeight + baseNotesRowHeight,
       baseNotesRowHeight,
       isLastEffectiveSeg,
@@ -133,6 +154,10 @@ export function buildL1PrintPages(
     pages.push(currentPage)
   }
 
+  if (useLastPageSevenSlots) {
+    applyLastPageSevenSlotMetrics(pages, totalCols, staticHeight, data)
+  }
+
   return pages.map((pageMetrics, pageIndex) => {
     const gapTotal = pageMetrics.length > 1 ? (pageMetrics.length - 1) * L1_PRINT_LAYOUT.pageGapPt : 0
     const baseHeightSum = pageMetrics.reduce((sum, metric) => sum + metric.baseHeight, 0)
@@ -150,6 +175,8 @@ export function buildL1PrintPages(
         index: metric.index,
         startCol: metric.startCol,
         endCol: metric.endCol,
+        cpIndices: metric.cpIndices,
+        hasSummarySlot: metric.hasSummarySlot,
         pageIndex,
         notesRowHeight: metric.baseNotesRowHeight + extra,
         baseNotesRowHeight: metric.baseNotesRowHeight,
@@ -165,6 +192,54 @@ export function buildL1PrintPages(
       usedHeight: baseHeightSum + gapTotal,
       extraHeight: remainingHeight,
     }
+  })
+}
+
+function applyLastPageSevenSlotMetrics(
+  pages: SegmentMetric[][],
+  totalCols: number,
+  staticHeight: number,
+  data: InspectionTableData,
+) {
+  const lastPage = pages[pages.length - 1]
+  if (!lastPage || lastPage.length === 0) return
+
+  const firstCol = lastPage[0].startCol
+  const remainingIndices = range(firstCol, totalCols - 1)
+  const usedSlotCount = Math.min(
+    lastPage.length,
+    Math.max(
+      1,
+      Math.ceil(Math.max(0, remainingIndices.length - L1_PRINT_LAYOUT.maxLocPerSeg) / (L1_PRINT_LAYOUT.maxLocPerSeg + 1)) + 1,
+    ),
+  )
+  lastPage.splice(usedSlotCount)
+
+  let offset = 0
+
+  lastPage.forEach((metric, slotIndex) => {
+    const isFinalSlot = slotIndex === lastPage.length - 1
+    const capacity = isFinalSlot
+      ? L1_PRINT_LAYOUT.maxLocPerSeg
+      : L1_PRINT_LAYOUT.maxLocPerSeg + 1
+    const cpIndices = remainingIndices.slice(offset, offset + capacity)
+    offset += cpIndices.length
+
+    metric.cpIndices = cpIndices
+    metric.startCol = cpIndices[0] ?? totalCols
+    metric.endCol = cpIndices[cpIndices.length - 1] ?? (totalCols - 1)
+    metric.isLastEffectiveSeg = isFinalSlot
+    metric.hasSummarySlot = isFinalSlot
+
+    const notesText = isFinalSlot ? (data.notes ?? '') : '/'
+    const baseNotesRowHeight = estimateWrappedRowHeight(
+      notesText,
+      getL1NotesContentWidth(isFinalSlot),
+      L1_PRINT_LAYOUT.dataFontSize,
+      L1_PRINT_LAYOUT.notesRowH,
+    )
+    metric.baseNotesRowHeight = baseNotesRowHeight
+    metric.baseHeight = staticHeight + baseNotesRowHeight
   })
 }
 
@@ -410,6 +485,11 @@ function getL1StaticSegmentHeight(
 
 function getL1SegmentRowCount(template: L1Template): number {
   return template.inspectionItems.length + (template.faultRow?.enabled ? 6 : 5)
+}
+
+function range(start: number, end: number): number[] {
+  if (end < start) return []
+  return Array.from({ length: end - start + 1 }, (_, idx) => start + idx)
 }
 
 function excelWidthToPixels(width: number): number {

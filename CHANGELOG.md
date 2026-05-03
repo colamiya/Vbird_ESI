@@ -2,6 +2,32 @@
 
 > 追加式修改日志。只允许在顶部新增，不允许覆盖或删除历史。
 
+## 2026-05-02
+
+### 用户 3 项反馈调整
+- **需求点**: 点位清单录入更贴近模板、L1 最后一页点位前移占用原 `/` 列、L3 总表按分部权值计算工程总合格率。
+- **路径**:
+  - `vbird-esi/src/components/LocationNamesEditor.vue`
+  - `vbird-esi/src/types/project.ts`
+  - `vbird-esi/src/utils/projectStructure.ts`
+  - `vbird-esi/src/utils/projectCalc.ts`
+  - `vbird-esi/src/utils/l1PrintLayout.ts`
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/src/views/ProjectManager/ProjectManager.vue`
+  - `vbird-esi/src/views/ProjectEditor/ProjectEditor.vue`
+  - `README.md`
+  - `ONGOING.md`
+  - `AGENTS.md`
+- **结果**:
+  - 点位清单录入改为 `检测部位1~6` 网格，支持 Excel/文本粘贴拆分并自动同步数量与 L1 检查点列。
+  - 保留缩减点位时的已有数据删除确认；取消后恢复原点位数量和名称。
+  - L1 导出使用导出专用末页槽位，最后页非最终块可显示 7 个点位，最终块保留 `6 点位 + 汇总列`。
+  - `ProjectSubdivision.summaryWeight` 加入项目实例数据，旧项目默认补齐为 `1`。
+  - L3 检查结果计算表新增“权值”列，总合格率改为分部设备完好率加权平均，权值为 0 的分部不参与计算。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）
+
 ## 2026-04-26
 
 ### L1 点检表跨分割块交互统一

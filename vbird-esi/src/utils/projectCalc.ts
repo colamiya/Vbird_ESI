@@ -15,11 +15,13 @@ export interface ProjectCalcL1Row {
 export interface ProjectCalcSubdivision {
   l2TemplateId: string
   name: string
+  summaryWeight: number
   finalScore: number | null
   finalScoreDisplay: string
   totalCount: number
   faultCount: number
   passRate: string
+  passRateValue: number | null
   l1Rows: ProjectCalcL1Row[]
 }
 
@@ -29,6 +31,8 @@ export interface ProjectCalcPreview {
   passRate: string
   avgScore: number | null
   avgScoreDisplay: string
+  weightedPassRateValue: number | null
+  weightedPassRateDisplay: string
   overallGrade: string
   subdivisions: ProjectCalcSubdivision[]
 }
@@ -98,6 +102,8 @@ export function buildProjectCalcPreview(
     const l1Rows = buildSubdivisionL1Rows(sub, l1Templates)
     const subTotalCount = l1Rows.reduce((sum, row) => sum + row.totalCount, 0)
     const subFaultCount = l1Rows.reduce((sum, row) => sum + row.faultCount, 0)
+    const passRateValue = subTotalCount > 0 ? (1 - subFaultCount / subTotalCount) * 100 : null
+    const summaryWeight = normalizeWeight(sub.summaryWeight)
 
     projectTotalCount += subTotalCount
     projectFaultCount += subFaultCount
@@ -110,16 +116,19 @@ export function buildProjectCalcPreview(
     return {
       l2TemplateId: sub.l2TemplateId,
       name: sub.l2TemplateName || '(未命名分部)',
+      summaryWeight,
       finalScore,
       finalScoreDisplay: finalScore !== null ? finalScore.toFixed(2) : '/',
       totalCount: subTotalCount,
       faultCount: subFaultCount,
       passRate: calcRateFromCounts(subTotalCount, subFaultCount),
+      passRateValue,
       l1Rows,
     }
   })
 
   const avgScore = calcWeightedCriticalScore(projectRows)
+  const weightedPassRateValue = calcWeightedSubdivisionPassRate(subdivisions)
 
   return {
     totalCount: projectTotalCount,
@@ -127,6 +136,8 @@ export function buildProjectCalcPreview(
     passRate: calcRateFromCounts(projectTotalCount, projectFaultCount),
     avgScore,
     avgScoreDisplay: avgScore !== null ? avgScore.toFixed(2) : '/',
+    weightedPassRateValue,
+    weightedPassRateDisplay: formatPercentValue(weightedPassRateValue),
     overallGrade: calcOverallGrade(avgScore),
     subdivisions,
   }
@@ -243,6 +254,24 @@ function calcWeightedScore(rows: ProjectCalcL1Row[]): number {
 function calcRateFromCounts(totalCount: number, faultCount: number): string {
   if (totalCount <= 0) return '/'
   return ((1 - faultCount / totalCount) * 100).toFixed(1) + '%'
+}
+
+function calcWeightedSubdivisionPassRate(rows: ProjectCalcSubdivision[]): number | null {
+  const validRows = rows.filter(row => row.passRateValue !== null && row.summaryWeight > 0)
+  const weightTotal = validRows.reduce((sum, row) => sum + row.summaryWeight, 0)
+  if (weightTotal <= 0) return null
+  const weighted = validRows.reduce((sum, row) => sum + (row.passRateValue! * row.summaryWeight), 0)
+  return weighted / weightTotal
+}
+
+function formatPercentValue(value: number | null): string {
+  return value === null ? '/' : `${value.toFixed(1)}%`
+}
+
+function normalizeWeight(value: unknown): number {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return 1
+  return Math.max(0, num)
 }
 
 function calcOverallGrade(avgScore: number | null): string {

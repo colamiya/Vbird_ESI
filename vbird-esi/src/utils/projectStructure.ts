@@ -8,7 +8,8 @@ import type {
 import type { L1Template, L2Template } from '@/types/template'
 import { generateId } from '@/utils/id'
 
-export const PROJECT_DATA_VERSION = 2
+export const PROJECT_DATA_VERSION = 3
+export const DEFAULT_SUBDIVISION_WEIGHT = 1
 
 export function defaultCheckpointNames(quantity: number): string[] {
   return Array.from({ length: Math.max(0, quantity) }, (_, idx) => `地点${idx + 1}`)
@@ -73,10 +74,19 @@ export function hasDataBeyondQuantity(data: InspectionTableData, quantity: numbe
 
 export function ensureProjectLocationItems(project: Project): Project {
   project.dataVersion = PROJECT_DATA_VERSION
+  for (const sub of project.subdivisions ?? []) {
+    sub.summaryWeight = normalizeSubdivisionWeight(sub.summaryWeight)
+  }
   if (!project.locationItems) {
     project.locationItems = inferLocationItemsFromProject(project)
   }
   return project
+}
+
+export function normalizeSubdivisionWeight(value: unknown): number {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return DEFAULT_SUBDIVISION_WEIGHT
+  return Math.max(0, num)
 }
 
 export function inferLocationItemsFromProject(project: Project): ProjectLocationItem[] {
@@ -114,6 +124,7 @@ export function findOrCreateSubdivision(
       selectedL1Ids: [],
       inspectionData: {},
       scoringData: {},
+      summaryWeight: DEFAULT_SUBDIVISION_WEIGHT,
     }
     project.subdivisions.push(sub)
   }

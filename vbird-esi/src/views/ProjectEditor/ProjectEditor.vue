@@ -11,6 +11,7 @@ import { useProjectStore } from '@/stores/projectStore'
 import { useTemplateStore } from '@/stores/templateStore'
 import type { ProjectSubdivision, InspectionTableData, L2Template, DeductionItem, ProjectLocationItem } from '@/types'
 import InspectionTable from '@/components/InspectionTable.vue'
+import LocationNamesEditor from '@/components/LocationNamesEditor.vue'
 import { buildDeviceListRows, buildProjectCalcPreview, buildResultListRows } from '@/utils/projectCalc'
 import {
   defaultCheckpointNames,
@@ -124,6 +125,7 @@ function confirmAddSubdivision() {
     selectedL1Ids: [],
     inspectionData: {},
     scoringData: {},
+    summaryWeight: 1,
   }
 
   project.value.subdivisions.push(sub)
@@ -239,7 +241,7 @@ const locationDraft = ref({
   l1TemplateId: '',
   unit: '',
   quantity: 1,
-  namesText: defaultCheckpointNames(1).join('\n'),
+  checkpointNames: defaultCheckpointNames(1),
 })
 
 const locationSelectableL2Templates = computed(() => selectableL2Templates.value.concat(
@@ -258,24 +260,26 @@ function openAddLocationDialog() {
     l1TemplateId: '',
     unit: '',
     quantity: 1,
-    namesText: defaultCheckpointNames(1).join('\n'),
+    checkpointNames: defaultCheckpointNames(1),
   }
   showAddLocationDialog.value = true
 }
 
-function syncDraftNames() {
-  locationDraft.value.namesText = normalizeCheckpointNames(
-    splitNames(locationDraft.value.namesText),
+function syncDraftQuantity() {
+  locationDraft.value.checkpointNames = normalizeCheckpointNames(
+    locationDraft.value.checkpointNames,
     locationDraft.value.quantity,
-  ).join('\n')
+  )
 }
 
-function splitNames(text: string): string[] {
-  return text.split(/[\n,，、]+/).map(v => v.trim()).filter(Boolean)
+function handleDraftNamesChange(names: string[]) {
+  const next = compactCheckpointNames(names)
+  locationDraft.value.checkpointNames = next
+  locationDraft.value.quantity = next.length
 }
 
-function locationNamesText(item: ProjectLocationItem): string {
-  return normalizeCheckpointNames(item.checkpointNames ?? [], item.quantity).join('\n')
+function locationNames(item: ProjectLocationItem): string[] {
+  return normalizeCheckpointNames(item.checkpointNames ?? [], item.quantity)
 }
 
 async function confirmAddLocationItem() {
@@ -293,7 +297,7 @@ async function confirmAddLocationItem() {
     ElMessage.warning('该分部下已存在相同点检表')
     return
   }
-  const names = normalizeCheckpointNames(splitNames(locationDraft.value.namesText), locationDraft.value.quantity)
+  const names = normalizeCheckpointNames(locationDraft.value.checkpointNames, locationDraft.value.quantity)
   const item: ProjectLocationItem = {
     id: generateId(),
     l2TemplateId: l2.id,
@@ -332,9 +336,34 @@ async function handleLocationQuantityChange(item: ProjectLocationItem) {
   syncProjectLocationItem(item)
 }
 
-function handleLocationNamesChange(item: ProjectLocationItem, text: string) {
-  item.checkpointNames = normalizeCheckpointNames(splitNames(text), item.quantity)
+async function handleLocationNamesChange(item: ProjectLocationItem, names: string[]) {
+  if (!project.value) return
+  const nextNames = compactCheckpointNames(names)
+  const nextQuantity = nextNames.length
+  const sub = project.value.subdivisions.find(s => s.l2TemplateId === item.l2TemplateId)
+  const data = sub?.inspectionData[item.l1TemplateId]
+
+  if (data && nextQuantity < data.checkpoints.length && hasDataBeyondQuantity(data, nextQuantity)) {
+    try {
+      await ElMessageBox.confirm(
+        '减少数量会删除对应点位列及已填写数据，确定继续？',
+        '删除点位确认',
+        { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
+      )
+    } catch {
+      item.quantity = data.checkpoints.length
+      item.checkpointNames = data.checkpoints.map(cp => cp.name)
+      return
+    }
+  }
+
+  item.quantity = nextQuantity
+  item.checkpointNames = normalizeCheckpointNames(nextNames, nextQuantity)
   syncProjectLocationItem(item)
+}
+
+function compactCheckpointNames(names: string[]): string[] {
+  return names.map(name => `${name ?? ''}`.trim()).filter(Boolean)
 }
 
 function syncProjectLocationItem(item: ProjectLocationItem) {
@@ -382,6 +411,18 @@ function getDeductionValue(itemId: string): number {
 function setDeductionValue(itemId: string, val: number | undefined) {
   if (!currentSub.value) return
   currentSub.value.scoringData[itemId] = val ?? 0
+  scheduleSave()
+}
+
+function getSummaryWeight(): number {
+  const num = Number(currentSub.value?.summaryWeight)
+  return Number.isFinite(num) ? Math.max(0, num) : 1
+}
+
+function setSummaryWeight(val: number | undefined) {
+  if (!currentSub.value) return
+  const num = Number(val)
+  currentSub.value.summaryWeight = Number.isFinite(num) ? Math.max(0, num) : 0
   scheduleSave()
 }
 
@@ -435,6 +476,7 @@ const deviceRows = computed(() =>
 onMounted(async () => {
   await Promise.all([projectStore.loadProjects(), templateStore.loadAll()])
   if (project.value) {
+    ensureProjectLocationItems(project.value)
     projectStore.setCurrentProject(project.value.id)
   }
 })
@@ -592,6 +634,17 @@ watch(() => locationDraft.value.l2TemplateId, () => {
             <p>该 L2 模板未配置扣分项</p>
           </div>
           <div class="scoring-row">
+            <div class="scoring-field">
+              <label>总表权值</label>
+              <el-input-number
+                :model-value="getSummaryWeight()"
+                @update:model-value="(val: number | undefined) => setSummaryWeight(val)"
+                :min="0"
+                :max="999"
+                :step="0.5"
+                size="small"
+              />
+            </div>
             <div
               v-for="item in currentDeductionItems"
               :key="item.id"
@@ -649,14 +702,12 @@ watch(() => locationDraft.value.l2TemplateId, () => {
               />
             </template>
           </el-table-column>
-          <el-table-column label="点位名称" min-width="280">
+          <el-table-column label="点位名称" min-width="620">
             <template #default="{ row }">
-              <el-input
-                :model-value="locationNamesText(row)"
-                type="textarea"
-                :rows="2"
-                size="small"
-                @change="(val: string) => handleLocationNamesChange(row, val)"
+              <LocationNamesEditor
+                :model-value="locationNames(row)"
+                :min-rows="1"
+                @update:model-value="(names: string[]) => handleLocationNamesChange(row, names)"
               />
             </template>
           </el-table-column>
@@ -756,19 +807,17 @@ watch(() => locationDraft.value.l2TemplateId, () => {
               :max="999"
               controls-position="right"
               style="width: 100%"
-              @change="syncDraftNames"
+              @change="syncDraftQuantity"
             />
           </div>
         </div>
         <div class="form-row" style="margin-top: 12px">
           <div class="form-field full">
             <label>点位名称</label>
-            <el-input
-              v-model="locationDraft.namesText"
-              type="textarea"
-              :rows="4"
-              placeholder="每行一个点位名称；留空按地点1、地点2生成"
-              @blur="syncDraftNames"
+            <LocationNamesEditor
+              v-model="locationDraft.checkpointNames"
+              :min-rows="3"
+              @change="handleDraftNamesChange"
             />
           </div>
         </div>
@@ -827,8 +876,8 @@ watch(() => locationDraft.value.l2TemplateId, () => {
             <strong class="calc-summary-value">{{ calcPreview.faultCount }}</strong>
           </div>
           <div class="calc-summary-card">
-            <span class="calc-summary-label">设备完好率</span>
-            <strong class="calc-summary-value">{{ calcPreview.passRate }}</strong>
+            <span class="calc-summary-label">工程总合格率</span>
+            <strong class="calc-summary-value">{{ calcPreview.weightedPassRateDisplay }}</strong>
           </div>
           <div class="calc-summary-card">
             <span class="calc-summary-label">总体评分 / 等级</span>
@@ -851,6 +900,7 @@ watch(() => locationDraft.value.l2TemplateId, () => {
               <span class="calc-subsection-meta">分部评分：{{ sub.finalScoreDisplay }}</span>
             </div>
             <div class="calc-subsection-summary">
+              <span>权值 {{ sub.summaryWeight }}</span>
               <span>总量 {{ sub.totalCount }}</span>
               <span>故障 {{ sub.faultCount }}</span>
               <span>设备完好率 {{ sub.passRate }}</span>

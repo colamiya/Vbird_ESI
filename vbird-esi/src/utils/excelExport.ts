@@ -12,10 +12,10 @@
  * ========================
  *
  * 自动切割规则：
- * - 每段最多 6 个地点
+ * - UI 分段每段最多 6 个地点；导出最后页非最终块可使用第 7 槽承接后续点位
  * - 优先上下排列，超 A4 高度则左右换列
  * - 所有 gridRow 排数对齐（占位表填充）
- * - 仅全局最后一段有单项检测结果汇总列
+ * - 仅导出最终块有单项检测结果汇总列
  */
 
 import ExcelJS from 'exceljs'
@@ -34,7 +34,7 @@ import {
   getDisplayL1Name,
 } from '@/utils/projectCalc'
 import {
-  buildL1PrintPages,
+  buildL1ExportPrintPages,
   buildL1WorksheetLayout,
   estimateWrappedRowHeight,
   L1_PRINT_LAYOUT,
@@ -107,7 +107,7 @@ export async function exportProjectToExcel(
  * - 先按真实打印区高度做逻辑分页
  * - 再把各逻辑页作为横向页块渲染到同一张 Sheet
  * - 同位次表格共享同一组行号与备注行高，缺失位次用占位表补齐
- * - 最后一页预留末列；仅全局最后块显示单项检测结果汇总列，非末块仍作为点位/占位列
+ * - 最后一页非最终块使用原汇总/占位列作为第 7 个点位槽，最终块保留 6 点位 + 汇总列
  */
 function buildL1Sheet(
   workbook: ExcelJS.Workbook,
@@ -119,7 +119,7 @@ function buildL1Sheet(
     pageSetup: { ...L1_WORKSHEET_PAGE_SETUP },
   })
   const items = template.inspectionItems
-  const pages = buildL1PrintPages(template, data)
+  const pages = buildL1ExportPrintPages(template, data)
 
   if (pages.length === 0) return
 
@@ -131,26 +131,26 @@ function buildL1Sheet(
 
   pages.forEach((page, pageIndex) => {
     const startCol = worksheetLayout.pageStartCols[pageIndex]
-    const hasSummaryCol = pageIndex === pages.length - 1
+    const isLastPage = pageIndex === pages.length - 1
 
     for (let slotIndex = 0; slotIndex < worksheetLayout.maxSegmentsPerPage; slotIndex++) {
       const seg = page.segments[slotIndex]
-      const cpIndices = Array.from({ length: LAYOUT_CONFIG.l1.maxLocPerSeg }, (_, i) => {
-        if (!seg) return -1
-        const idx = seg.startCol + i
-        return idx <= seg.endCol ? idx : -1
-      })
+      const hasSummarySlot = seg?.hasSummarySlot ?? false
+      const locationSlotCount = isLastPage && !hasSummarySlot
+        ? LAYOUT_CONFIG.l1.maxLocPerSeg + 1
+        : LAYOUT_CONFIG.l1.maxLocPerSeg
 
       writeL1SegmentBody(
         sheet,
         template,
         items,
         data,
-        cpIndices,
+        seg?.cpIndices ?? [],
+        locationSlotCount,
         startCol,
         worksheetLayout.slotStartRows[slotIndex],
         companyName,
-        hasSummaryCol,
+        hasSummarySlot,
         seg?.isLastEffectiveSeg ?? false,
         worksheetLayout.slotNotesRowHeights[slotIndex],
       )
@@ -196,10 +196,11 @@ function writeL1SegmentBody(
   items: typeof template.inspectionItems,
   data: InspectionTableData,
   cpIndices: number[],
+  locationSlotCount: number,
   startCol: number,
   startRow: number,
   _companyName?: string,
-  hasSummaryCol = false,
+  hasSummarySlot = false,
   isLastEffectiveSeg = false,
   notesRowHeight: number = LAYOUT_CONFIG.l1.notesRowH,
 ): number {
@@ -209,14 +210,18 @@ function writeL1SegmentBody(
   const rc = startCol + 2
   const dc = startCol + 3
   const summaryCol = dc + cfg.maxLocPerSeg
+  const normalizedLocationSlotCount = Math.max(0, locationSlotCount)
 
   let r = startRow
 
   const fnt = LAYOUT_CONFIG.font
   const bdr = LAYOUT_CONFIG.borders
   const allCpIndices = Array.from({ length: data.checkpoints.length }, (_, i) => i)
-  const segmentEndCol = hasSummaryCol ? summaryCol : (dc + cfg.maxLocPerSeg - 1)
-  const finalSummaryCol = hasSummaryCol && isLastEffectiveSeg
+  const segmentEndCol = hasSummarySlot
+    ? summaryCol
+    : (dc + normalizedLocationSlotCount - 1)
+  const dataHeaderEndCol = hasSummarySlot ? summaryCol - 1 : segmentEndCol
+  const finalSummaryCol = hasSummarySlot && isLastEffectiveSeg
 
   const titleCell = sheet.getCell(r, sc)
   titleCell.value = `设施名称：${template.facilityName || template.name}`
@@ -242,18 +247,18 @@ function writeL1SegmentBody(
   setCell(sheet, r, ic,  '检查项目',   true, fnt.l1HeaderSize, 'center')
   setCell(sheet, r, rc,  '技术要求',   true, fnt.l1HeaderSize, 'center')
   setCell(sheet, r, dc, '测试点单项结果', true, fnt.l1HeaderSize, 'center')
-  sheet.mergeCells(r, dc, r, finalSummaryCol ? dc + cfg.maxLocPerSeg - 1 : segmentEndCol)
+  sheet.mergeCells(r, dc, r, dataHeaderEndCol)
   if (finalSummaryCol) setCell(sheet, r, summaryCol, '汇总列', true, fnt.l1HeaderSize, 'center')
 
   sheet.mergeCells(r, sc, r + 1, sc)
   sheet.mergeCells(r, ic, r + 1, ic)
   sheet.mergeCells(r, rc, r + 1, rc)
-  if (finalSummaryCol) sheet.mergeCells(r, summaryCol, r + 1, summaryCol)
+  if (hasSummarySlot) sheet.mergeCells(r, summaryCol, r + 1, summaryCol)
   sheet.getRow(r).height = cfg.headerRow1H
   r++
 
-  for (let i = 0; i < cfg.maxLocPerSeg; i++) {
-    const cpIdx = cpIndices[i]
+  for (let i = 0; i < normalizedLocationSlotCount; i++) {
+    const cpIdx = cpIndices[i] ?? -1
     const cell = sheet.getCell(r, dc + i)
     cell.value = cpIdx >= 0 ? (data.checkpoints[cpIdx]?.name ?? `检查点${cpIdx + 1}`) : '/'
     applyL1Cell(cell, false, fnt.dataSize, 'center')
@@ -265,19 +270,7 @@ function writeL1SegmentBody(
     }
   }
 
-  if (hasSummaryCol && !finalSummaryCol) {
-    const cell = sheet.getCell(r, summaryCol)
-    cell.value = '/'
-    applyL1Cell(cell, false, fnt.dataSize, 'center')
-    cell.border = {
-      top: { style: bdr.all },
-      bottom: { style: bdr.headerBottom },
-      left: { style: bdr.all },
-      right: { style: bdr.all },
-    }
-  }
-
-  ;[sc, ic, rc].concat(finalSummaryCol ? [summaryCol] : []).forEach(c => {
+  ;[sc, ic, rc].concat(hasSummarySlot ? [summaryCol] : []).forEach(c => {
     const cell = sheet.getCell(r, c)
     if (!cell.font) applyL1Cell(cell, true, fnt.l1HeaderSize, 'center')
     cell.border = {
@@ -297,8 +290,8 @@ function writeL1SegmentBody(
     setCell(sheet, r, sc, rowIdx + 1, false, fnt.l1HeaderSize, 'center')
     setCell(sheet, r, ic, item.groupName, false, fnt.dataSize, 'left')
     setCell(sheet, r, rc, item.requirement, false, fnt.dataSize, 'left')
-    for (let i = 0; i < cfg.maxLocPerSeg; i++) {
-      const cpIdx = cpIndices[i]
+    for (let i = 0; i < normalizedLocationSlotCount; i++) {
+      const cpIdx = cpIndices[i] ?? -1
       let val: any = '/'
       if (cpIdx >= 0) {
         val = data.values[rowIdx]?.[cpIdx] ?? '/'
@@ -307,7 +300,7 @@ function writeL1SegmentBody(
       setCell(sheet, r, dc + i, val, false, fnt.dataSize, 'center')
     }
 
-    if (hasSummaryCol) {
+    if (hasSummarySlot) {
       const rateStr = isLastEffectiveSeg
         ? calcRowPassRate(items[rowIdx], data.values[rowIdx], allCpIndices)
         : '/'
@@ -339,8 +332,8 @@ function writeL1SegmentBody(
 
   if (template.faultRow?.enabled) {
     setCell(sheet, r, rc, '是否故障', false, fnt.dataSize, 'center')
-    for (let i = 0; i < cfg.maxLocPerSeg; i++) {
-      const cpIdx = cpIndices[i]
+    for (let i = 0; i < normalizedLocationSlotCount; i++) {
+      const cpIdx = cpIndices[i] ?? -1
       let val = '/'
       if (cpIdx >= 0) {
         val = data.faultValues[cpIdx] ?? '/'
@@ -348,14 +341,14 @@ function writeL1SegmentBody(
       }
       setCell(sheet, r, dc + i, val, false, fnt.dataSize, 'center')
     }
-    if (hasSummaryCol) setCell(sheet, r, summaryCol, '/', false, fnt.dataSize, 'center')
+    if (hasSummarySlot) setCell(sheet, r, summaryCol, '/', false, fnt.dataSize, 'center')
     sheet.getRow(r).height = cfg.faultRowH
     r++
   }
 
   setCell(sheet, r, rc, '设备完好率', false, fnt.dataSize, 'center')
   setCell(sheet, r, dc, '设备完好率', false, fnt.dataSize, 'center')
-  sheet.mergeCells(r, dc, r, finalSummaryCol ? dc + cfg.maxLocPerSeg - 1 : segmentEndCol)
+  sheet.mergeCells(r, dc, r, dataHeaderEndCol)
   if (finalSummaryCol) {
     const totalRate = isLastEffectiveSeg ? calcTotalPassRate(data, allCpIndices, items.length) : '/'
     setCell(sheet, r, summaryCol, totalRate, false, fnt.dataSize, 'center')
@@ -364,7 +357,7 @@ function writeL1SegmentBody(
   r++
 
   const notes = isLastEffectiveSeg ? (data.notes ?? '') : '/'
-  const notesEndCol = hasSummaryCol ? summaryCol : (dc + cfg.maxLocPerSeg - 1)
+  const notesEndCol = hasSummarySlot ? summaryCol : segmentEndCol
   setCell(sheet, r, rc, '备注', false, fnt.dataSize, 'center')
   setCell(sheet, r, dc, notes, false, fnt.dataSize, 'center')
   sheet.mergeCells(r, dc, r, notesEndCol)
@@ -587,7 +580,7 @@ function buildL3Sheet(
   const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '检查结果计算表'))
   const cfg = LAYOUT_CONFIG.l3
   const preview = buildProjectCalcPreview(project, l1Templates)
-  const colEnd = 5
+  const colEnd = 6
 
   cfg.colWidths.forEach((w, i) => { sheet.getColumn(i + 1).width = w })
 
@@ -604,7 +597,8 @@ function buildL3Sheet(
   setCell(sheet, r9, 2, '设施',     true, 11, 'left')
   setCell(sheet, r9, 3, '总量',     true, 11, 'center')
   setCell(sheet, r9, 4, '故障数量', true, 11, 'center')
-  setCell(sheet, r9, 5, '设备完好率',   true, 11, 'center')
+  setCell(sheet, r9, 5, '权值',     true, 11, 'center')
+  setCell(sheet, r9, 6, '设备完好率', true, 11, 'center')
   sheet.getRow(r9).height = 20
 
   let r = r9 + 1
@@ -614,10 +608,10 @@ function buildL3Sheet(
     const finalScore = sub.finalScore
 
     const subNameCell = setCell(sheet, r, 1, `分部名称：${subName}`, true, 11, 'left')
-    sheet.mergeCells(r, 1, r, 4)
-    styleRangeFromCell(sheet, r, 1, r, 4, subNameCell)
+    sheet.mergeCells(r, 1, r, 5)
+    styleRangeFromCell(sheet, r, 1, r, 5, subNameCell)
     fillRange(sheet, r, 1, r, colEnd, cfg.subNameBgArgb)
-    const scoreCell = setCell(sheet, r, 5, finalScore !== null ? `${finalScore.toFixed(2)}` : '/', true, 11, 'center')
+    const scoreCell = setCell(sheet, r, 6, finalScore !== null ? `${finalScore.toFixed(2)}` : '/', true, 11, 'center')
     scoreCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cfg.subNameBgArgb } }
     sheet.getRow(r).height = 20
     r++
@@ -627,7 +621,8 @@ function buildL3Sheet(
       setCell(sheet, r, 2, row.name, false, 11, 'left')
       setCell(sheet, r, 3, row.totalCount, false, 11, 'center')
       setCell(sheet, r, 4, row.faultCount, false, 11, 'center')
-      setCell(sheet, r, 5, row.passRate, false, 11, 'center')
+      setCell(sheet, r, 5, '', false, 11, 'center')
+      setCell(sheet, r, 6, row.passRate, false, 11, 'center')
       sheet.getRow(r).height = 20
       r++
     })
@@ -637,25 +632,26 @@ function buildL3Sheet(
     applyBorderOnly(sheet.getCell(r, 2))
     setCell(sheet, r, 3, sub.totalCount, false, 11, 'center')
     setCell(sheet, r, 4, sub.faultCount, false, 11, 'center')
-    setCell(sheet, r, 5, sub.passRate, false, 11, 'center')
+    setCell(sheet, r, 5, sub.summaryWeight, false, 11, 'center')
+    setCell(sheet, r, 6, sub.passRate, false, 11, 'center')
     sheet.getRow(r).height = 20
     r++
   })
 
   setCell(sheet, r, 1, '合计', false, 11, 'left')
-  sheet.mergeCells(r, 1, r, 4)
-  for (let c = 2; c <= 4; c++) applyBorderOnly(sheet.getCell(r, c))
-  setCell(sheet, r, 5, preview.avgScoreDisplay, false, 11, 'center')
+  sheet.mergeCells(r, 1, r, 5)
+  for (let c = 2; c <= 5; c++) applyBorderOnly(sheet.getCell(r, c))
+  setCell(sheet, r, 6, preview.weightedPassRateDisplay, false, 11, 'center')
   sheet.getRow(r).height = 20
   r++
 
   setCell(sheet, r, 1, '总体质量等级', true, 11, 'left')
-  sheet.mergeCells(r, 1, r, 4)
-  for (let c = 2; c <= 4; c++) applyBorderOnly(sheet.getCell(r, c))
-  setCell(sheet, r, 5, preview.overallGrade, true, 11, 'center')
+  sheet.mergeCells(r, 1, r, 5)
+  for (let c = 2; c <= 5; c++) applyBorderOnly(sheet.getCell(r, c))
+  setCell(sheet, r, 6, preview.overallGrade, true, 11, 'center')
   sheet.getRow(r).height = 20
 
-  sheet.pageSetup.printArea = `A1:E${r}`
+  sheet.pageSetup.printArea = `A1:F${r}`
 }
 
 function buildLocationListSheet(workbook: ExcelJS.Workbook, project: Project) {

@@ -4,9 +4,11 @@
 >
 > 本项目采用“双层启动协议”：`BOOT.md` 负责跨项目通用启动流程，`AGENTS.md` 负责本项目特化约束。
 >
-> 最后更新: 2026-04-18
+> 最后更新: 2026-05-02
 
 > 2026-04-26 补充：`other/20260425-New` 新需求已进入实现。项目新增“项目级点位清单 / 结果清单 / 设备清单 / 检查设备库 / 重点设备 / 设备完好率 / 全量系统数据导入导出”链路。后续判断现状时以代码和 `ONGOING.md` 的 2026-04-26 补充为准。
+>
+> 2026-05-02 补充：点位清单录入已改为模板式 `检测部位1~6` 网格；L1 导出最后页使用导出专用 7 槽位规则；L3 工程总合格率改为分部设备完好率按项目实例权值加权平均。当前仍保留“总体质量等级”展示字段。
 
 ---
 
@@ -117,7 +119,7 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 | `00_BOOT.md` (项目根) | 兼容跳转入口（请优先看 `ONGOING.md`） | 低 |
 | `src/types/cell.ts` | 四色语义枚举、颜色映射、可编辑判定 | 低 |
 | `src/types/template.ts` | L1/L2/L3 模板类型（含 DeductionItem / **GradeThreshold**） | 中 |
-| `src/types/project.ts` | 项目、分部、点检实例（含 notes/**segmentBreaks**/**segmentLayout**/rowBreaks/ScoringData） | 中 |
+| `src/types/project.ts` | 项目、分部、点检实例（含 notes/**segmentBreaks**/**segmentLayout**/rowBreaks/ScoringData/**summaryWeight**） | 中 |
 | `src/types/device.ts` | 检查设备库类型（设备名称/型号/单位/用途），设备清单数量固定为 1 | 中 |
 | `src/stores/templateStore.ts` | 模板三级 CRUD 状态管理 (Pinia) | 中 |
 | `src/stores/projectStore.ts` | 项目 CRUD + 当前项目跟踪 (Pinia) | 中 |
@@ -127,8 +129,8 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 | `src/utils/id.ts` | UUID 生成 + 时间戳工具 | 低 |
 | `src/utils/projectStructure.ts` | 项目级点位清单迁移与同步工具，负责点位清单 ↔ L2/L1/检查点列结构同步 | 高 |
 | `src/utils/segmentLayout.ts` | **【Phase 11/15 重构】** 坐标式布局工具函数（computeSegments / getOrMigrateLayout / buildLayoutGrid / getMaxGridRow / getMaxGridCol），主要服务 UI 分段与旧布局兼容 | 中 |
-| `src/utils/l1PrintLayout.ts` | **【新增】** L1 打印分页工具：读取 `excelLayout.ts` 配置，负责动态行高估算 / 逻辑分页 + Worksheet 页块布局 + 页型动态列宽，供 `excelExport.ts` 与 `SegmentLayoutEditor.vue` 共用 | 中 |
-| `src/utils/projectCalc.ts` | **【新增】** 项目/L3 汇总计算共享工具（总量 / 故障数量 / 合格率 / 分部评分 / 检查结果计算预览），供 `excelExport.ts` 与 `ProjectEditor.vue` 共用 | 中 |
+| `src/utils/l1PrintLayout.ts` | **【新增】** L1 打印分页工具：读取 `excelLayout.ts` 配置，负责动态行高估算 / 逻辑分页 + Worksheet 页块布局 + 页型动态列宽；`buildL1PrintPages` 供 UI 预览，`buildL1ExportPrintPages` 供导出末页 7 槽位 | 中 |
+| `src/utils/projectCalc.ts` | **【新增】** 项目/L3 汇总计算共享工具（总量 / 故障数量 / 合格率 / 分部评分 / 分部权值加权总合格率 / 检查结果计算预览），供 `excelExport.ts` 与 `ProjectEditor.vue` 共用 | 中 |
 | `src/utils/numericRule.ts` | 数值条件判定引擎（UI/导出复用）：`parseNumeric / evalNumericRule / isPassed` | 中 |
 | `src/utils/excelExport.ts` | Excel 导出核心逻辑：读取 `excelLayout.ts` 配置，复用 `l1PrintLayout.ts` + `projectCalc.ts`；L1 显式写入 Excel `pageSetup`、按横向页块排布；列宽按页型动态铺满；同位次备注行共享高度；末页汇总列按段索引判定 | 中 |
 | `src/views/TemplateManager/TemplateManager.vue` | 模板管理主页：三级 Tab + 搜索 + 迷你预览 | 高 |
@@ -137,6 +139,7 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 | `src/views/TemplateManager/L3TemplateDialog.vue` | L3 模板创建/编辑 + 穿梭框关联 L2 | 中 |
 | `src/views/ProjectManager/ProjectManager.vue` | 项目列表 + 创建对话框 + 搜索 | 高 |
 | `src/views/ProjectEditor/ProjectEditor.vue` | 项目编辑器：面包屑导航 + 分部 Tab + **L1 二级 Tabs** + 评分 + 数据录入 + **检查结果计算预览弹窗** | 高 |
+| `src/components/LocationNamesEditor.vue` | 点位清单模板式网格录入组件：`检测部位1~6` 横向网格，支持 Excel/文本粘贴拆分并自动同步点位名称数组 | 中 |
 | `src/components/SegmentLayoutEditor.vue` | **【Phase 11/15 重构】** 从拖拽式编辑组件改为只读预览组件，显示"本表将自动分为 N 段，共 M 页"及分段详情 | 中 |
 | `src/components/InspectionTable.vue` | ⚠️ **最复杂组件** — 选区模型+多段渲染+拖拽填充+Undo+右键菜单，见下方警告 | 高 |
 | `src/components/layout/AppLayout.vue` | 主布局：侧边栏(ESI文字+SVG图标)+内容区 | 低 |
@@ -205,7 +208,8 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 - 等级阈值存在 `L2Template.scoring.gradeThresholds: GradeThreshold[]`
 - 导出时按 `minScore` 降序排序，第一个匹配者为等级
 - **兼容旧模板**：`gradeThresholds` 为空时回落到默认 85/70 阈值逻辑
-- L3 总表**不进行等级判定**，只显示合格率
+- L3 总表工程总合格率按各分部设备完好率与项目实例 `summaryWeight` 加权平均；权值为 0 或完好率无效的分部不参与
+- L3 当前仍保留“总体质量等级”展示字段，等级基于现有总体评分逻辑；后续若模板要求移除，以代码和新需求为准
 
 ### 9. ~~模板自定义表格样式~~（已移除）
 - `L1Template.columns.dataColumnWidth` / `summaryColumnWidth`：导出列宽，现固化为默认常量（90px / 100px），不再暴露 UI 入口
@@ -251,7 +255,7 @@ function onDragLeave(e: DragEvent) {
 - 同一张 L1 Sheet 内按页**横向页块排布**，后续逻辑页显示在右侧页块而不是下方
 - 每一页剩余高度会**平均分配到该页所有表格的备注行**，确保页面纵向铺满
 - 同位次表格的备注行高度按跨页块共享值统一，避免左右页块因行高不同而错位
-- **汇总列**：仅最后一页显示汇总列；其中仅全局最后有效段写入真实合格率和备注
+- **汇总列 / 末页 7 槽位**：UI 分段预览仍每段最多 6 个地点；Excel 导出最后页非最终块可使用原汇总/占位列作为第 7 个点位槽，最终块保留 `6 个地点 + 汇总列`；仅最终块写入真实合格率和备注
 - **设施名称标题行**：整行不显示边框，避免打印出现多余线框
 - **列宽**：无汇总页地点列 = 10；有汇总页地点列 = 8、汇总列 = 10；`序号 / 检查项目 / 技术要求` 按 `1:3:6` 分配该页剩余可打印宽度，使每个页块横向铺满
 
