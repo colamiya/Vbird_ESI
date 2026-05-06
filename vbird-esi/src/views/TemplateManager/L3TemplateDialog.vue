@@ -8,6 +8,11 @@ import { ElMessage } from 'element-plus'
 import type { L3Template } from '@/types'
 import { generateId, nowISO } from '@/utils/id'
 import { useTemplateStore } from '@/stores/templateStore'
+import {
+  DEFAULT_SUBDIVISION_WEIGHT,
+  normalizeL3SubdivisionWeights,
+  normalizeSubdivisionWeight,
+} from '@/utils/projectStructure'
 
 const props = defineProps<{
   visible: boolean
@@ -34,6 +39,7 @@ const formData = ref({
 })
 
 const selectedL2Ids = ref<string[]>([])
+const l2Weights = ref<Record<string, number>>({})
 
 // ---- 穿梭框数据源（独占模型：已被其他 L3 占用的 L2 不显示；无 L1 的 L2 也不显示） ----
 const transferData = computed(() => {
@@ -58,6 +64,11 @@ const transferData = computed(() => {
     }))
 })
 
+const selectedL2WeightRows = computed(() => selectedL2Ids.value.map(id => ({
+  id,
+  name: store.l2Templates.find(t => t.id === id)?.name ?? id,
+})))
+
 watch(() => props.visible, (val) => {
   if (val) {
     if (props.template) {
@@ -68,12 +79,36 @@ watch(() => props.visible, (val) => {
         projectName: props.template.headerInfo.fields.projectName,
       }
       selectedL2Ids.value = [...props.template.availableL2Ids]
+      l2Weights.value = buildWeightMap(props.template)
     } else {
       formData.value = { name: '', title: '检查结果计算表', companyName: '', projectName: '' }
       selectedL2Ids.value = []
+      l2Weights.value = {}
     }
   }
 })
+
+watch(selectedL2Ids, (ids) => {
+  const next: Record<string, number> = {}
+  for (const id of ids) {
+    next[id] = normalizeSubdivisionWeight(l2Weights.value[id] ?? DEFAULT_SUBDIVISION_WEIGHT)
+  }
+  l2Weights.value = next
+})
+
+function buildWeightMap(template: L3Template): Record<string, number> {
+  return Object.fromEntries(
+    normalizeL3SubdivisionWeights(template).map(item => [item.l2TemplateId, item.weight]),
+  )
+}
+
+function getL2Weight(l2TemplateId: string): number {
+  return normalizeSubdivisionWeight(l2Weights.value[l2TemplateId] ?? DEFAULT_SUBDIVISION_WEIGHT)
+}
+
+function setL2Weight(l2TemplateId: string, val: number | undefined) {
+  l2Weights.value[l2TemplateId] = normalizeSubdivisionWeight(val)
+}
 
 function handleSave() {
   if (!formData.value.name.trim()) {
@@ -88,6 +123,10 @@ function handleSave() {
     createdAt: props.template?.createdAt ?? now,
     updatedAt: now,
     availableL2Ids: selectedL2Ids.value,
+    subdivisionWeights: selectedL2Ids.value.map(l2TemplateId => ({
+      l2TemplateId,
+      weight: getL2Weight(l2TemplateId),
+    })),
     headerInfo: {
       title: formData.value.title.trim(),
       fields: {
@@ -113,7 +152,7 @@ function handleSave() {
   <el-dialog
     v-model="dialogVisible"
     :title="template ? `编辑 L3 模板 — ${template.name}` : '新建 L3 总表模板'"
-    width="680px"
+    width="760px"
     :close-on-click-modal="false"
     destroy-on-close
   >
@@ -151,6 +190,25 @@ function handleSave() {
         filterable
         filter-placeholder="搜索模板"
       />
+      <div v-if="selectedL2WeightRows.length" class="weight-panel">
+        <div class="weight-title">分部权值</div>
+        <el-table :data="selectedL2WeightRows" border size="small">
+          <el-table-column prop="name" label="分部工程" min-width="180" />
+          <el-table-column label="权值" width="180">
+            <template #default="{ row }">
+              <el-input-number
+                :model-value="getL2Weight(row.id)"
+                @update:model-value="(val: number | undefined) => setL2Weight(row.id, val)"
+                :min="0"
+                :max="999"
+                :step="0.5"
+                size="small"
+                controls-position="right"
+              />
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </div>
 
     <template #footer>
@@ -169,5 +227,7 @@ function handleSave() {
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); }
 .form-field { display: flex; flex-direction: column; gap: 4px; }
 .form-field label { font-size: 13px; color: var(--text-secondary); }
+.weight-panel { margin-top: var(--space-md); }
+.weight-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-xs); }
 .required { color: var(--color-danger); }
 </style>

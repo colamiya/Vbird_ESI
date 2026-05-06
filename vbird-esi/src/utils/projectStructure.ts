@@ -5,7 +5,7 @@ import type {
   ProjectLocationItem,
   ProjectSubdivision,
 } from '@/types/project'
-import type { L1Template, L2Template } from '@/types/template'
+import type { L1Template, L2Template, L3SubdivisionWeight, L3Template } from '@/types/template'
 import { generateId } from '@/utils/id'
 
 export const PROJECT_DATA_VERSION = 3
@@ -89,6 +89,27 @@ export function normalizeSubdivisionWeight(value: unknown): number {
   return Math.max(0, num)
 }
 
+export function normalizeL3SubdivisionWeights(
+  l3: Pick<L3Template, 'availableL2Ids' | 'subdivisionWeights'>,
+): L3SubdivisionWeight[] {
+  const savedWeights = new Map<string, number>()
+  for (const item of l3.subdivisionWeights ?? []) {
+    savedWeights.set(item.l2TemplateId, normalizeSubdivisionWeight(item.weight))
+  }
+  return l3.availableL2Ids.map(l2TemplateId => ({
+    l2TemplateId,
+    weight: savedWeights.get(l2TemplateId) ?? DEFAULT_SUBDIVISION_WEIGHT,
+  }))
+}
+
+export function getL3SubdivisionWeight(
+  l3: Pick<L3Template, 'subdivisionWeights'> | null | undefined,
+  l2TemplateId: string,
+): number {
+  const item = l3?.subdivisionWeights?.find(row => row.l2TemplateId === l2TemplateId)
+  return normalizeSubdivisionWeight(item?.weight)
+}
+
 export function inferLocationItemsFromProject(project: Project): ProjectLocationItem[] {
   const items: ProjectLocationItem[] = []
   for (const sub of project.subdivisions ?? []) {
@@ -115,6 +136,7 @@ export function inferLocationItemsFromProject(project: Project): ProjectLocation
 export function findOrCreateSubdivision(
   project: Project,
   l2: Pick<L2Template, 'id' | 'name'>,
+  summaryWeight = DEFAULT_SUBDIVISION_WEIGHT,
 ): ProjectSubdivision {
   let sub = project.subdivisions.find(s => s.l2TemplateId === l2.id)
   if (!sub) {
@@ -124,7 +146,7 @@ export function findOrCreateSubdivision(
       selectedL1Ids: [],
       inspectionData: {},
       scoringData: {},
-      summaryWeight: DEFAULT_SUBDIVISION_WEIGHT,
+      summaryWeight: normalizeSubdivisionWeight(summaryWeight),
     }
     project.subdivisions.push(sub)
   }
@@ -135,11 +157,12 @@ export function syncLocationItemToProject(
   project: Project,
   item: ProjectLocationItem,
   l1Template: L1Template,
+  summaryWeight = DEFAULT_SUBDIVISION_WEIGHT,
 ): void {
   const sub = findOrCreateSubdivision(project, {
     id: item.l2TemplateId,
     name: item.l2TemplateName,
-  })
+  }, summaryWeight)
   if (!sub.selectedL1Ids.includes(item.l1TemplateId)) {
     sub.selectedL1Ids.push(item.l1TemplateId)
   }

@@ -17,6 +17,7 @@ import { exportFullBackupPackage, importFullBackupPackage } from '@/utils/backup
 import {
   defaultCheckpointNames,
   ensureProjectLocationItems,
+  getL3SubdivisionWeight,
   normalizeCheckpointNames,
   PROJECT_DATA_VERSION,
   syncLocationItemToProject,
@@ -60,6 +61,7 @@ interface WizardRow {
   unit: string
   quantity: number
   checkpointNames: string[]
+  summaryWeight: number
 }
 
 const wizardRows = ref<WizardRow[]>([])
@@ -76,8 +78,11 @@ function prepareProjectWizard() {
     ElMessage.warning('请输入项目名称')
     return
   }
-  const availableL2Ids = createForm.value.l3TemplateId
-    ? (templateStore.l3Templates.find(t => t.id === createForm.value.l3TemplateId)?.availableL2Ids ?? [])
+  const selectedL3 = createForm.value.l3TemplateId
+    ? templateStore.l3Templates.find(t => t.id === createForm.value.l3TemplateId)
+    : null
+  const availableL2Ids = selectedL3
+    ? selectedL3.availableL2Ids
     : templateStore.l2Templates.map(t => t.id)
 
   const rows: WizardRow[] = []
@@ -96,6 +101,7 @@ function prepareProjectWizard() {
         unit: '',
         quantity: 1,
         checkpointNames: defaultCheckpointNames(1),
+        summaryWeight: getL3SubdivisionWeight(selectedL3, l2.id),
       })
     }))
   wizardRows.value = rows
@@ -144,7 +150,7 @@ async function handleCreateProject() {
       checkpointNames: names,
     }
     project.locationItems!.push(item)
-    syncLocationItemToProject(project, item, l1)
+    syncLocationItemToProject(project, item, l1, row.summaryWeight)
   }
 
   await projectStore.saveProject(project)
@@ -175,6 +181,7 @@ async function handleExportExcel(project: Project) {
       templateStore.l1Templates,
       templateStore.l2Templates,
       templateStore.deviceItems,
+      templateStore.l3Templates,
     )
     if (ok) {
       ElMessage.success('Excel 导出成功')
@@ -341,7 +348,7 @@ onMounted(() => {
     </div>
 
     <!-- 创建项目对话框 -->
-    <el-dialog v-model="showCreateDialog" title="新建项目" width="980px" :close-on-click-modal="false">
+    <el-dialog v-model="showCreateDialog" title="新建项目" width="min(1600px, 94vw)" :close-on-click-modal="false">
       <div v-if="createStep === 'basic'" class="form-section">
         <div class="form-row">
           <div class="form-field full">
@@ -387,19 +394,19 @@ onMounted(() => {
           <span class="meta-info">已选 {{ wizardRows.filter(r => r.selected).length }} 项</span>
         </div>
         <el-table :data="wizardRows" border size="small" max-height="460" row-key="key">
-          <el-table-column width="54" align="center">
+          <el-table-column width="40" align="center">
             <template #default="{ row }">
               <el-checkbox v-model="row.selected" />
             </template>
           </el-table-column>
-          <el-table-column prop="l2TemplateName" label="分部工程" min-width="140" />
-          <el-table-column prop="l1TemplateName" label="分项点检表" min-width="160" />
-          <el-table-column label="单位" width="110">
+          <el-table-column prop="l2TemplateName" label="分部工程" min-width="80" />
+          <el-table-column prop="l1TemplateName" label="分项点检表" min-width="85" />
+          <el-table-column label="单位" width="100">
             <template #default="{ row }">
               <el-input v-model="row.unit" size="small" placeholder="台/套" />
             </template>
           </el-table-column>
-          <el-table-column label="数量" width="110">
+          <el-table-column label="数量" width="120">
             <template #default="{ row }">
               <el-input-number
                 v-model="row.quantity"
@@ -411,7 +418,7 @@ onMounted(() => {
               />
             </template>
           </el-table-column>
-          <el-table-column label="点位名称" min-width="620">
+          <el-table-column label="点位名称" min-width="600">
             <template #default="{ row }">
               <LocationNamesEditor
                 v-model="row.checkpointNames"

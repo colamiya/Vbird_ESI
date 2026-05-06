@@ -16,6 +16,7 @@ import { buildDeviceListRows, buildProjectCalcPreview, buildResultListRows } fro
 import {
   defaultCheckpointNames,
   ensureProjectLocationItems,
+  getL3SubdivisionWeight,
   hasDataBeyondQuantity,
   normalizeCheckpointNames,
   removeLocationItemFromProject,
@@ -41,6 +42,23 @@ const activeSubIndex = ref(0)
 const currentSub = computed(() =>
   project.value?.subdivisions[activeSubIndex.value] ?? null
 )
+
+const currentL3Template = computed(() =>
+  project.value?.l3TemplateId
+    ? templateStore.l3Templates.find(t => t.id === project.value!.l3TemplateId) ?? null
+    : null
+)
+
+function getTemplateSummaryWeight(l2TemplateId: string): number {
+  return getL3SubdivisionWeight(currentL3Template.value, l2TemplateId)
+}
+
+function getEffectiveSummaryWeight(sub: ProjectSubdivision | null): number {
+  if (!sub) return 1
+  if (currentL3Template.value) return getTemplateSummaryWeight(sub.l2TemplateId)
+  const num = Number(sub.summaryWeight)
+  return Number.isFinite(num) ? Math.max(0, num) : 1
+}
 
 // ---- 当前选中的 L1 点检表 ID（分部内二级 Tab）----
 const activeL1Id = ref<string | null>(null)
@@ -125,7 +143,7 @@ function confirmAddSubdivision() {
     selectedL1Ids: [],
     inspectionData: {},
     scoringData: {},
-    summaryWeight: 1,
+    summaryWeight: getTemplateSummaryWeight(l2.id),
   }
 
   project.value.subdivisions.push(sub)
@@ -310,7 +328,7 @@ async function confirmAddLocationItem() {
   }
   ensureProjectLocationItems(project.value)
   project.value.locationItems!.push(item)
-  syncLocationItemToProject(project.value, item, l1)
+  syncLocationItemToProject(project.value, item, l1, getTemplateSummaryWeight(l2.id))
   showAddLocationDialog.value = false
   scheduleSave()
   ElMessage.success('点位清单已添加')
@@ -371,7 +389,7 @@ function syncProjectLocationItem(item: ProjectLocationItem) {
   const l1 = templateStore.l1Templates.find(t => t.id === item.l1TemplateId)
   if (!l1) return
   item.checkpointNames = normalizeCheckpointNames(item.checkpointNames ?? [], item.quantity)
-  syncLocationItemToProject(project.value, item, l1)
+  syncLocationItemToProject(project.value, item, l1, getTemplateSummaryWeight(item.l2TemplateId))
   scheduleSave()
 }
 
@@ -415,15 +433,7 @@ function setDeductionValue(itemId: string, val: number | undefined) {
 }
 
 function getSummaryWeight(): number {
-  const num = Number(currentSub.value?.summaryWeight)
-  return Number.isFinite(num) ? Math.max(0, num) : 1
-}
-
-function setSummaryWeight(val: number | undefined) {
-  if (!currentSub.value) return
-  const num = Number(val)
-  currentSub.value.summaryWeight = Number.isFinite(num) ? Math.max(0, num) : 0
-  scheduleSave()
+  return getEffectiveSummaryWeight(currentSub.value)
 }
 
 // ---- 返回项目列表 ----
@@ -461,7 +471,11 @@ const saveStatusText = computed(() => {
 })
 
 const calcPreview = computed(() =>
-  project.value ? buildProjectCalcPreview(project.value, templateStore.l1Templates) : null
+  project.value
+    ? buildProjectCalcPreview(project.value, templateStore.l1Templates, {
+        getSubdivisionWeight: sub => getEffectiveSummaryWeight(sub),
+      })
+    : null
 )
 
 const resultRows = computed(() =>
@@ -636,14 +650,7 @@ watch(() => locationDraft.value.l2TemplateId, () => {
           <div class="scoring-row">
             <div class="scoring-field">
               <label>总表权值</label>
-              <el-input-number
-                :model-value="getSummaryWeight()"
-                @update:model-value="(val: number | undefined) => setSummaryWeight(val)"
-                :min="0"
-                :max="999"
-                :step="0.5"
-                size="small"
-              />
+              <span class="readonly-value">{{ getSummaryWeight() }}</span>
             </div>
             <div
               v-for="item in currentDeductionItems"
@@ -1046,6 +1053,7 @@ watch(() => locationDraft.value.l2TemplateId, () => {
 .scoring-row { display: flex; gap: var(--space-md); flex-wrap: wrap; align-items: center; }
 .scoring-field { display: flex; align-items: center; gap: 6px; }
 .scoring-field label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.readonly-value { min-width: 48px; font-size: 12px; color: var(--text-primary); }
 .no-deductions { font-size: 12px; color: var(--text-tertiary); padding: var(--space-xs) 0; }
 
 /* 空状态 */

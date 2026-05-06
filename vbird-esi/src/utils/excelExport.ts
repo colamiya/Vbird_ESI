@@ -24,7 +24,7 @@ import { save } from '@tauri-apps/plugin-dialog'
 import { EXCEL_LAYOUT_CONFIG as LAYOUT_CONFIG } from '@/config/excelLayout'
 import type { Project, ProjectLocationItem, ProjectSubdivision, InspectionTableData } from '@/types/project'
 import type { DeviceItem } from '@/types/device'
-import type { L1Template, L2Template, DeductionItem } from '@/types/template'
+import type { L1Template, L2Template, L3Template, DeductionItem } from '@/types/template'
 import { isEffectiveValue, isPassed } from '@/utils/numericRule'
 import {
   buildDeviceListRows,
@@ -41,6 +41,7 @@ import {
   L1_WORKSHEET_PAGE_SETUP,
   pxToPoints,
 } from '@/utils/l1PrintLayout'
+import { getL3SubdivisionWeight } from '@/utils/projectStructure'
 
 // Excel 列宽、页边距、缩放、行高和比例统一配置在 src/config/excelLayout.ts。
 
@@ -53,6 +54,7 @@ export async function exportProjectToExcel(
   l1Templates: L1Template[],
   l2Templates: L2Template[],
   deviceItems: DeviceItem[] = [],
+  l3Templates: L3Template[] = [],
 ): Promise<boolean> {
   const filePath = await save({
     title: '导出 Excel',
@@ -65,9 +67,11 @@ export async function exportProjectToExcel(
   workbook.creator = 'ESI'
   workbook.created = new Date()
 
-  buildL3Sheet(workbook, project, l1Templates)
+  const l3Template = l3Templates.find(t => t.id === project.l3TemplateId)
+
+  buildL3Sheet(workbook, project, l1Templates, l3Template)
   buildLocationListSheet(workbook, project)
-  buildResultListSheet(workbook, project, l1Templates)
+  buildResultListSheet(workbook, project, l1Templates, l3Template)
   buildDeviceListSheet(workbook, project, l1Templates, deviceItems)
 
   project.subdivisions.forEach((sub, subIdx) => {
@@ -576,10 +580,13 @@ function buildL3Sheet(
   workbook: ExcelJS.Workbook,
   project: Project,
   l1Templates: L1Template[],
+  l3Template?: L3Template,
 ) {
   const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '检查结果计算表'))
   const cfg = LAYOUT_CONFIG.l3
-  const preview = buildProjectCalcPreview(project, l1Templates)
+  const preview = buildProjectCalcPreview(project, l1Templates, {
+    getSubdivisionWeight: sub => l3Template ? getL3SubdivisionWeight(l3Template, sub.l2TemplateId) : sub.summaryWeight,
+  })
   const colEnd = 6
 
   cfg.colWidths.forEach((w, i) => { sheet.getColumn(i + 1).width = w })
@@ -700,7 +707,12 @@ function buildLocationListSheet(workbook: ExcelJS.Workbook, project: Project) {
   applyListSheetPageSetup(sheet, colEnd, Math.max(3, row - 1))
 }
 
-function buildResultListSheet(workbook: ExcelJS.Workbook, project: Project, l1Templates: L1Template[]) {
+function buildResultListSheet(
+  workbook: ExcelJS.Workbook,
+  project: Project,
+  l1Templates: L1Template[],
+  l3Template?: L3Template,
+) {
   const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '结果清单'))
   const colEnd = 5
   LAYOUT_CONFIG.list.resultColWidths.forEach((w, idx) => { sheet.getColumn(idx + 1).width = w })
@@ -712,7 +724,9 @@ function buildResultListSheet(workbook: ExcelJS.Workbook, project: Project, l1Te
   sheet.getRow(3).height = LAYOUT_CONFIG.list.rowH.header
 
   let row = 4
-  const preview = buildProjectCalcPreview(project, l1Templates)
+  const preview = buildProjectCalcPreview(project, l1Templates, {
+    getSubdivisionWeight: sub => l3Template ? getL3SubdivisionWeight(l3Template, sub.l2TemplateId) : sub.summaryWeight,
+  })
   preview.subdivisions.forEach(sub => {
     const startRow = row
     sub.l1Rows.forEach((item, idx) => {

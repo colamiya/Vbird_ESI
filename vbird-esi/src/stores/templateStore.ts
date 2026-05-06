@@ -7,6 +7,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { L1Template, L2Template, L3Template, DeviceItem } from '@/types'
 import { saveData, loadAllData, deleteData, STORAGE_DIRS } from '@/utils/storage'
+import { normalizeL3SubdivisionWeights } from '@/utils/projectStructure'
 
 export const useTemplateStore = defineStore('template', () => {
   // ---- 状态 ----
@@ -79,7 +80,7 @@ export const useTemplateStore = defineStore('template', () => {
   async function loadL3Templates() {
     loading.value = true
     try {
-      l3Templates.value = await loadAllData<L3Template>(STORAGE_DIRS.TEMPLATES_L3)
+      l3Templates.value = (await loadAllData<L3Template>(STORAGE_DIRS.TEMPLATES_L3)).map(normalizeL3Template)
     } catch (e) {
       console.warn('加载 L3 模板失败:', e)
       l3Templates.value = []
@@ -90,6 +91,7 @@ export const useTemplateStore = defineStore('template', () => {
 
   async function saveL3Template(template: L3Template) {
     template.updatedAt = new Date().toISOString()
+    template.subdivisionWeights = normalizeL3SubdivisionWeights(template)
     await saveData(STORAGE_DIRS.TEMPLATES_L3, template)
     const idx = l3Templates.value.findIndex(t => t.id === template.id)
     const copy = JSON.parse(JSON.stringify(template)) as L3Template  // BUG-5: 深拷贝防引用泄漏
@@ -149,7 +151,7 @@ export const useTemplateStore = defineStore('template', () => {
     else console.warn('加载 L1 模板失败:', r1.reason)
     if (r2.status === 'fulfilled') l2Templates.value = r2.value
     else console.warn('加载 L2 模板失败:', r2.reason)
-    if (r3.status === 'fulfilled') l3Templates.value = r3.value
+    if (r3.status === 'fulfilled') l3Templates.value = r3.value.map(normalizeL3Template)
     else console.warn('加载 L3 模板失败:', r3.reason)
     if (r4.status === 'fulfilled') deviceItems.value = r4.value
     else console.warn('加载设备库失败:', r4.reason)
@@ -177,3 +179,10 @@ export const useTemplateStore = defineStore('template', () => {
     loadAll,
   }
 })
+
+function normalizeL3Template(template: L3Template): L3Template {
+  return {
+    ...template,
+    subdivisionWeights: normalizeL3SubdivisionWeights(template),
+  }
+}

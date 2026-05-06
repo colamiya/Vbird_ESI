@@ -19,7 +19,7 @@
 - L1 模板支持重点设备字段和检查项设备关联；模板管理页新增检查设备库。
 - 全链路统计术语切换为“设备完好率”，故障台数按 `是否故障=是` 的有效点位统计。
 - L2/L3 聚合计算改为样表公式：存在重点项时，重点最低值 `<=` 非重点最低值则取重点最低值，否则按总故障/总量加权。
-- L3 总表新增项目实例级分部权值，工程总合格率按 `Σ(分部设备完好率 × 权值) / Σ权值` 计算，权值为 0 的分部不参与总合格率。
+- L3 总表模板可为关联分部配置权值；计算预览和导出优先按 L3 模板权值计算，项目实例快照仅作缺模板回退；工程总合格率按 `Σ(分部设备完好率 × 权值) / Σ权值` 计算，权值为 0 的分部不参与总合格率。
 - Excel 导出前置输出 `检查结果计算表 / 点位清单表 / 结果清单 / 设备清单`，并对非法 Sheet 名字符做净化。
 - L1 Excel 导出最后页采用导出专用槽位：非最终块可承接 7 个点位，最终块保留 `6 点位 + 汇总列`，录入界面分段预览仍保持每段 6 点位。
 - 系统数据支持单 JSON 全量导出/导入，导入为整体替换模板、项目、设备库。
@@ -185,7 +185,7 @@ npm run tauri build    # 完整打包（生成 .exe / .msi 安装包）
 用户在模板管理器中操作：
   1. 创建 L1 点检表模板 → 定义检查项目行（文本型固定下拉：符合/不符合//；数值型配置条件 AND/OR）
   2. 创建 L2 分部表模板 → 配置自定义扣分项 + **质量等级阈值** + 关联可选的 L1 模板
-  3. 创建 L3 总表模板 → 关联可选的 L2 模板列表
+  3. 创建 L3 总表模板 → 关联可选的 L2 模板列表，并配置各分部总表权值
   4. 所有模板存入模板池，可随时编辑（**删除模板时会提示被引用情况**）
 ```
 
@@ -210,7 +210,7 @@ npm run tauri build    # 完整打包（生成 .exe / .msi 安装包）
   - 格式保真: 合并单元格、边框（模板设置）、行高（模板设置）
   - 列宽: 无汇总页地点列 `10`；有汇总页地点列 `8`、汇总列 `10`；`序号 / 检查项目 / 技术要求` 按 `1:3:6` 分配该页剩余可打印宽度（Excel 列宽单位）
   - L2: 质量等级由模板中配置的阈值判定（兼容无阈值的旧模板）
-  - L3: 分部合计行显示分部权值；工程总合格率按分部设备完好率加权平均；当前仍保留总体质量等级字段
+  - L3: 分部合计行显示 L3 模板配置的分部权值；工程总合格率按分部设备完好率加权平均；当前仍保留总体质量等级字段
   - 分段: 全程自动切割，每段最多 6 个地点；按标题/技术要求/备注等实际高度分页；放不下则整表移到下一页
   - 打印基准: L1 导出显式写入 Excel `pageSetup`（A4 竖向、上下 1.91cm、左右 1.78cm、页眉页脚 0.76cm、100% 缩放）
   - 分页落地: L1 在同一张 Sheet 内按横向页块排布；每个逻辑页占一组固定列块，打印顺序使用 `overThenDown`
@@ -393,11 +393,30 @@ interface L2Template {
 }
 ```
 
+```typescript
 /** 质量等级阈值（L2 模板中用户自定义）*/
 interface GradeThreshold {
   label: string;     // 等级名称，如 "优良"、"合格"、"不合格"
   minScore: number;  // 该等级最低分（包含），如 85
 }
+```
+
+### L3Template (单位工程总表模板)
+```typescript
+interface L3SubdivisionWeight {
+  l2TemplateId: string;           // 引用的 L2 模板 ID
+  weight: number;                 // 工程总合格率加权权值，0 表示不参与
+}
+
+interface L3Template {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  availableL2Ids: string[];       // 关联的 L2 模板（可选池）
+  subdivisionWeights?: L3SubdivisionWeight[]; // 旧模板缺失时按 1 处理
+}
+```
 
 ### Project (项目)
 ```typescript
@@ -427,6 +446,7 @@ interface ProjectSubdivision {
   selectedL1Ids: string[];
   inspectionData: Record<string, InspectionTableData>;
   scoringData: ScoringData;      // 动态扣分项数据
+  summaryWeight: number;         // L3 模板带入的项目实例快照，缺模板时作为回退
 }
 
 interface InspectionTableData {

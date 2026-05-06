@@ -37,6 +37,10 @@ export interface ProjectCalcPreview {
   subdivisions: ProjectCalcSubdivision[]
 }
 
+export interface ProjectCalcOptions {
+  getSubdivisionWeight?: (sub: ProjectSubdivision) => unknown
+}
+
 export interface ResultListRow {
   subdivisionName: string
   l1Name: string
@@ -93,6 +97,7 @@ export function calcSubdivisionScore(sub: ProjectSubdivision, l1Templates: L1Tem
 export function buildProjectCalcPreview(
   project: Project,
   l1Templates: L1Template[],
+  options: ProjectCalcOptions = {},
 ): ProjectCalcPreview {
   let projectTotalCount = 0
   let projectFaultCount = 0
@@ -103,7 +108,7 @@ export function buildProjectCalcPreview(
     const subTotalCount = l1Rows.reduce((sum, row) => sum + row.totalCount, 0)
     const subFaultCount = l1Rows.reduce((sum, row) => sum + row.faultCount, 0)
     const passRateValue = subTotalCount > 0 ? (1 - subFaultCount / subTotalCount) * 100 : null
-    const summaryWeight = normalizeWeight(sub.summaryWeight)
+    const summaryWeight = normalizeWeight(options.getSubdivisionWeight?.(sub) ?? sub.summaryWeight)
 
     projectTotalCount += subTotalCount
     projectFaultCount += subFaultCount

@@ -2,6 +2,45 @@
 
 > 追加式修改日志。只允许在顶部新增，不允许覆盖或删除历史。
 
+## 2026-05-05
+
+### L3 模板分部权值配置
+- **需求点**: 用户确认总表权值需要放在模板库的 L3 总表里配置。
+- **路径**:
+  - `vbird-esi/src/types/template.ts`
+  - `vbird-esi/src/types/project.ts`
+  - `vbird-esi/src/stores/templateStore.ts`
+  - `vbird-esi/src/utils/projectStructure.ts`
+  - `vbird-esi/src/views/TemplateManager/L3TemplateDialog.vue`
+  - `vbird-esi/src/views/ProjectManager/ProjectManager.vue`
+  - `vbird-esi/src/views/ProjectEditor/ProjectEditor.vue`
+  - `README.md`
+  - `ONGOING.md`
+  - `AGENTS.md`
+- **结果**:
+  - `L3Template` 新增 `subdivisionWeights`，L3 模板弹窗在已关联 L2 下方配置分部权值。
+  - 旧 L3 模板加载时按已关联 L2 自动补齐权值 `1`，保存时只保留当前关联 L2 的权值。
+  - 新建项目、项目内新增分部和新增点位清单时，从项目关联的 L3 模板带入对应分部权值为项目实例快照。
+  - 计算预览和 Excel 导出优先按 L3 模板权值解析，项目实例快照作为缺模板回退。
+  - 项目编辑页的“总表权值”改为只读展示，避免与模板库配置入口冲突。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）
+
+### 点位名称网格表格级操作
+- **需求点**: 用户要求点位清单中的点位名称表格像录入表一样支持复制、粘贴、删除等操作。
+- **路径**:
+  - `vbird-esi/src/components/LocationNamesEditor.vue`
+  - `ONGOING.md`
+- **结果**:
+  - 点位名称网格改为显示态单元格，单击选中，双击或 `F2` / `Enter` 才进入输入。
+  - 支持鼠标拖选与 Shift 扩展选区。
+  - 支持 `Ctrl+A` 全选、`Ctrl+C` 复制为 TSV、粘贴 Excel 矩阵或普通文本列表。
+  - 多单元格选区支持 `Delete` / `Backspace` 清空，并继续通过组件原有 `change` 事件联动数量与点位同步。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）
+
 ## 2026-05-02
 
 ### 用户 3 项反馈调整

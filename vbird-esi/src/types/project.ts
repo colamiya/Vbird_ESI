@@ -71,7 +71,7 @@ export interface ProjectSubdivision {
   inspectionData: Record<string, InspectionTableData>
   /** 分部表扣分数据 */
   scoringData: ScoringData
-  /** 总表加权计算使用的分部权值，项目实例中填写 */
+  /** 总表加权计算使用的分部权值，由 L3 模板带入为项目实例快照，缺模板时作为回退 */
   summaryWeight: number
 }
 

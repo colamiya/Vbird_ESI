@@ -8,7 +8,7 @@
 
 > 2026-04-26 补充：`other/20260425-New` 新需求已进入实现。项目新增“项目级点位清单 / 结果清单 / 设备清单 / 检查设备库 / 重点设备 / 设备完好率 / 全量系统数据导入导出”链路。后续判断现状时以代码和 `ONGOING.md` 的 2026-04-26 补充为准。
 >
-> 2026-05-02 补充：点位清单录入已改为模板式 `检测部位1~6` 网格；L1 导出最后页使用导出专用 7 槽位规则；L3 工程总合格率改为分部设备完好率按项目实例权值加权平均。当前仍保留“总体质量等级”展示字段。
+> 2026-05-02 补充：点位清单录入已改为模板式 `检测部位1~6` 网格；L1 导出最后页使用导出专用 7 槽位规则；L3 工程总合格率改为分部设备完好率按 L3 模板配置权值加权平均，项目实例 `summaryWeight` 仅作缺模板回退。当前仍保留“总体质量等级”展示字段。
 
 ---
 
@@ -118,7 +118,7 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 | `CHANGELOG.md` (项目根) | 追加式修改日志 | 中 |
 | `00_BOOT.md` (项目根) | 兼容跳转入口（请优先看 `ONGOING.md`） | 低 |
 | `src/types/cell.ts` | 四色语义枚举、颜色映射、可编辑判定 | 低 |
-| `src/types/template.ts` | L1/L2/L3 模板类型（含 DeductionItem / **GradeThreshold**） | 中 |
+| `src/types/template.ts` | L1/L2/L3 模板类型（含 DeductionItem / **GradeThreshold** / **L3SubdivisionWeight**） | 中 |
 | `src/types/project.ts` | 项目、分部、点检实例（含 notes/**segmentBreaks**/**segmentLayout**/rowBreaks/ScoringData/**summaryWeight**） | 中 |
 | `src/types/device.ts` | 检查设备库类型（设备名称/型号/单位/用途），设备清单数量固定为 1 | 中 |
 | `src/stores/templateStore.ts` | 模板三级 CRUD 状态管理 (Pinia) | 中 |
@@ -127,7 +127,7 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 | `src/utils/storage.ts` | 文件存储封装（前端→Rust） | 中 |
 | `src/utils/backup.ts` | 单 JSON 全量系统数据导入导出（模板/项目/设备库），导入为整体替换 | 中 |
 | `src/utils/id.ts` | UUID 生成 + 时间戳工具 | 低 |
-| `src/utils/projectStructure.ts` | 项目级点位清单迁移与同步工具，负责点位清单 ↔ L2/L1/检查点列结构同步 | 高 |
+| `src/utils/projectStructure.ts` | 项目级点位清单迁移与同步工具，负责点位清单 ↔ L2/L1/检查点列结构同步，并提供 L3 模板权值归一化/读取工具 | 高 |
 | `src/utils/segmentLayout.ts` | **【Phase 11/15 重构】** 坐标式布局工具函数（computeSegments / getOrMigrateLayout / buildLayoutGrid / getMaxGridRow / getMaxGridCol），主要服务 UI 分段与旧布局兼容 | 中 |
 | `src/utils/l1PrintLayout.ts` | **【新增】** L1 打印分页工具：读取 `excelLayout.ts` 配置，负责动态行高估算 / 逻辑分页 + Worksheet 页块布局 + 页型动态列宽；`buildL1PrintPages` 供 UI 预览，`buildL1ExportPrintPages` 供导出末页 7 槽位 | 中 |
 | `src/utils/projectCalc.ts` | **【新增】** 项目/L3 汇总计算共享工具（总量 / 故障数量 / 合格率 / 分部评分 / 分部权值加权总合格率 / 检查结果计算预览），供 `excelExport.ts` 与 `ProjectEditor.vue` 共用 | 中 |
@@ -136,7 +136,7 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 | `src/views/TemplateManager/TemplateManager.vue` | 模板管理主页：三级 Tab + 搜索 + 迷你预览 | 高 |
 | `src/views/TemplateManager/L1TemplateDialog.vue` | L1 模板创建/编辑对话框（文本下拉固定 + 数值条件配置） | 中 |
 | `src/views/TemplateManager/L2TemplateDialog.vue` | L2 模板创建/编辑 + 穿梭框关联 L1 | 中 |
-| `src/views/TemplateManager/L3TemplateDialog.vue` | L3 模板创建/编辑 + 穿梭框关联 L2 | 中 |
+| `src/views/TemplateManager/L3TemplateDialog.vue` | L3 模板创建/编辑 + 穿梭框关联 L2 + 分部权值配置 | 中 |
 | `src/views/ProjectManager/ProjectManager.vue` | 项目列表 + 创建对话框 + 搜索 | 高 |
 | `src/views/ProjectEditor/ProjectEditor.vue` | 项目编辑器：面包屑导航 + 分部 Tab + **L1 二级 Tabs** + 评分 + 数据录入 + **检查结果计算预览弹窗** | 高 |
 | `src/components/LocationNamesEditor.vue` | 点位清单模板式网格录入组件：`检测部位1~6` 横向网格，支持 Excel/文本粘贴拆分并自动同步点位名称数组 | 中 |
@@ -208,7 +208,7 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 - 等级阈值存在 `L2Template.scoring.gradeThresholds: GradeThreshold[]`
 - 导出时按 `minScore` 降序排序，第一个匹配者为等级
 - **兼容旧模板**：`gradeThresholds` 为空时回落到默认 85/70 阈值逻辑
-- L3 总表工程总合格率按各分部设备完好率与项目实例 `summaryWeight` 加权平均；权值为 0 或完好率无效的分部不参与
+- L3 总表工程总合格率按各分部设备完好率与 L3 模板配置权值加权平均；项目创建/新增分部时将模板权值带入 `ProjectSubdivision.summaryWeight` 快照，计算预览和导出能拿到 L3 模板时以模板权值为准，权值为 0 或完好率无效的分部不参与
 - L3 当前仍保留“总体质量等级”展示字段，等级基于现有总体评分逻辑；后续若模板要求移除，以代码和新需求为准
 
 ### 9. ~~模板自定义表格样式~~（已移除）

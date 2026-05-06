@@ -137,6 +137,14 @@ export interface L2Template {
 // L3 — 单位工程总表模板
 // ========================
 
+/** L3 总表内各分部工程的权值配置 */
+export interface L3SubdivisionWeight {
+  /** 引用的 L2 模板 ID */
+  l2TemplateId: string
+  /** 工程总合格率加权平均时使用的权值，0 表示不参与 */
+  weight: number
+}
+
 /** L3 单位工程总表模板 */
 export interface L3Template {
   id: string
@@ -146,6 +154,8 @@ export interface L3Template {
 
   // 关联的 L2 模板（可选池）
   availableL2Ids: string[]
+  /** 关联 L2 在总表工程总合格率中的权值，旧模板缺失时按 1 处理 */
+  subdivisionWeights?: L3SubdivisionWeight[]
 
   // 总表自身格式
   headerInfo: {
