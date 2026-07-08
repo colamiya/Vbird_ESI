@@ -2,6 +2,112 @@
 
 > 追加式修改日志。只允许在顶部新增，不允许覆盖或删除历史。
 
+## 2026-07-08
+
+### ExcelJS 异常打印参数修复
+- **问题点**: 消防导出文件在 Excel 打开时提示整个工作簿异常，而非单个 Sheet 内容错误。
+- **路径**:
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/scripts/generate-fire-export-sample.ts`
+- **结果**:
+  - 排查 `.xlsx` 内部 XML 后确认 ExcelJS 写入了异常打印参数 `horizontalDpi/verticalDpi=4294967295`，客户模板无该字段。
+  - 新增 `sanitizeWorkbookPageSetup()`，在工作簿写出前统一清理异常 DPI、打印机默认值及冲突的缩放字段。
+  - 重新生成消防确认文件：`vbird-esi/outputs/excel-style-check/消防设施效果确认.xlsx`。
+- **验证**:
+  - 解包 XML 确认已无 `4294967295`、`horizontalDpi`、`verticalDpi`。
+  - `openpyxl` 可正常读取所有 Sheet。
+  - `git diff --check` 通过。
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）。
+
+### L1 最后有效备注填满页底
+- **问题点**: 最后一页只有上方有效点位块时，备注仅占当前槽位高度，下方空槽未被备注栏填满。
+- **路径**:
+  - `vbird-esi/src/utils/excelExport.ts`
+- **结果**:
+  - 最后有效点位块的“备注”标签列和备注内容列改为纵向合并到 L1 打印区域底行。
+  - 不调整全局行高，避免影响同一 Sheet 内其他横向页块分页。
+- **验证**:
+  - 消防样本 `消防设施点检` 打印区域为 `A1:S29`，备注内容合并区域为 `M19:S29`，备注标签合并区域为 `L19:L29`。
+  - `git diff --check` 通过。
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）。
+
+## 2026-07-07
+
+### L1 多点位分页尾部结构修正
+- **需求点**: 用户用 32 个点位核对 `视频监控外观点检` 后反馈：右侧页块末尾空地点段应删除；除最后点位段外，其他段不应输出“设备完好率/备注”；最后点位段备注应填充到该打印页末尾。
+- **路径**:
+  - `vbird-esi/src/utils/l1PrintLayout.ts`
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/scripts/generate-export-style-sample.ts`
+- **结果**:
+  - `applyLastPageSevenSlotMetrics()` 改为最后一个有点位的槽才作为最终槽，32 点位场景不再生成空的第三个右侧占位段。
+  - L1 非最终导出块只写到“是否故障”行，不再写“设备完好率/备注”。
+  - 最终导出块写“设备完好率/备注”，备注内容区域纵向合并到该页块底部。
+  - 测试脚本将 `视频监控外观点检` 扩展为 32 个点位，便于持续核对分页。
+- **验证**:
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）
+
+### 结果清单标度列补充
+- **需求点**: 客户确认 `结果清单` 新增“标度”列即评定等级，应按所属 L2 模板“质量等级配置”对每个 L1/组合完好率进行判定；“检查体系结构”的检测方法来自 L1 模板创建时填写。
+- **路径**:
+  - `vbird-esi/src/utils/projectCalc.ts`
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/src/config/excelLayout.ts`
+  - `vbird-esi/src/views/ProjectEditor/ProjectEditor.vue`
+- **结果**:
+  - 新增 `calcGradeByThresholds()`，按 L2 `gradeThresholds` 从高到低匹配 L1/组合完好率，旧模板无阈值时回退默认优良/合格/不合格。
+  - 项目页 `结果清单` 新增“标度”列。
+  - Excel `结果清单` 扩展为 `序号/分部工程/分项工程/设备总数/故障台数/设备完好率/标度`，并按客户截图将“设备总数”和“标度”列填充黄色底。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+
+## 2026-07-05
+
+### 客户补充口径初版
+- **需求点**: 客户明确 L1 分拆表现为多个独立分项点检表，只在结果中按权重合并最终完好率；手动判定作为第三种检查项类型；项目级技术要求需支持文本与数值范围。
+- **路径**:
+  - `vbird-esi/src/types/cell.ts`
+  - `vbird-esi/src/types/project.ts`
+  - `vbird-esi/src/utils/projectCalc.ts`
+  - `vbird-esi/src/utils/projectRequirement.ts`
+  - `vbird-esi/src/utils/numericRule.ts`
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/src/components/InspectionTable.vue`
+  - `vbird-esi/src/views/TemplateManager/L1TemplateDialog.vue`
+  - `vbird-esi/src/views/ProjectManager/ProjectManager.vue`
+  - `vbird-esi/src/views/ProjectEditor/ProjectEditor.vue`
+- **结果**:
+  - 检查项类型新增 `manual` 手动判定：数据格自由输入，默认合格，可单格切换为不合格，行合格率按手动判定统计。
+  - 点位清单和新建项目向导新增“结果组合/权重”：同一分部下组合名相同的多个 L1 独立录入、独立导出 L1 Sheet，但在 L2/结果清单/L3 汇总中合并为一条最终完好率。
+  - 项目级技术要求覆盖从纯文本升级为结构化覆盖，模板技术要求留空时项目中可选择文本或数值范围；数值范围会参与该行合格率判定。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）
+
+### 第一批客户新模板确定变更
+- **需求点**: 落地设备编号、结果清单设备总数、检查体系结构 Sheet、项目级可填写技术要求与导出前缺失拦截；Word 导出不实施。
+- **路径**:
+  - `vbird-esi/src/types/device.ts`
+  - `vbird-esi/src/types/template.ts`
+  - `vbird-esi/src/types/project.ts`
+  - `vbird-esi/src/utils/projectRequirement.ts`
+  - `vbird-esi/src/utils/projectCalc.ts`
+  - `vbird-esi/src/utils/projectStructure.ts`
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/src/views/TemplateManager/TemplateManager.vue`
+  - `vbird-esi/src/views/TemplateManager/L1TemplateDialog.vue`
+  - `vbird-esi/src/views/ProjectEditor/ProjectEditor.vue`
+  - `vbird-esi/src/views/ProjectManager/ProjectManager.vue`
+- **结果**:
+  - 设备库新增 `serialNumber`，设备清单页面与 Excel 导出新增“设备编号”列。
+  - 结果清单页面与 Excel 导出新增“设备总数”列，取 L1 有效点位总数。
+  - L1 检查项新增 `inspectionMethod`，Excel 前置 Sheet 新增“检查体系结构/检查内容及方法清单”。
+  - L1 模板技术要求允许留空；模板留空的检查项可在项目点检表技术要求列填写，保存时仅提醒，导出前强制补齐。
+  - L1 导出使用项目级有效技术要求，旧项目缺少 `requirementOverrides` 时自动兼容。
+- **验证**:
+  - `npx vue-tsc --noEmit` 通过
+  - `npm run build` 通过（仅 Vite 大 chunk 警告）
+
 ## 2026-05-05
 
 ### L3 模板分部权值配置

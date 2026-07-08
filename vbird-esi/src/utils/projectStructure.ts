@@ -7,6 +7,7 @@ import type {
 } from '@/types/project'
 import type { L1Template, L2Template, L3SubdivisionWeight, L3Template } from '@/types/template'
 import { generateId } from '@/utils/id'
+import { ensureRequirementOverrides } from '@/utils/projectRequirement'
 
 export const PROJECT_DATA_VERSION = 3
 export const DEFAULT_SUBDIVISION_WEIGHT = 1
@@ -29,17 +30,21 @@ export function createInspectionData(
   locationItemId?: string,
 ): InspectionTableData {
   const checkpoints: Checkpoint[] = checkpointNames.map(name => ({ id: generateId(), name }))
-  return {
+  const data: InspectionTableData = {
     l1TemplateId: template.id,
     l1TemplateName: template.name,
     locationItemId,
     checkpoints,
     values: template.inspectionItems.map(() => checkpoints.map(() => null)),
+    requirementOverrides: {},
+    manualJudgements: {},
     faultValues: checkpoints.map(() => null),
     notes: '',
     segmentBreaks: [],
     rowBreaks: [],
   }
+  ensureRequirementOverrides(data, template.inspectionItems)
+  return data
 }
 
 export function applyCheckpointNamesToInspectionData(
@@ -76,6 +81,11 @@ export function ensureProjectLocationItems(project: Project): Project {
   project.dataVersion = PROJECT_DATA_VERSION
   for (const sub of project.subdivisions ?? []) {
     sub.summaryWeight = normalizeSubdivisionWeight(sub.summaryWeight)
+    for (const data of Object.values(sub.inspectionData ?? {})) {
+      if (!data.requirementOverrides) data.requirementOverrides = {}
+      if (!data.manualJudgements) data.manualJudgements = {}
+      data.resultWeight = normalizeSubdivisionWeight(data.resultWeight)
+    }
   }
   if (!project.locationItems) {
     project.locationItems = inferLocationItemsFromProject(project)
@@ -127,6 +137,8 @@ export function inferLocationItemsFromProject(project: Project): ProjectLocation
         unit: '',
         quantity: names.length,
         checkpointNames: names.length > 0 ? names : defaultCheckpointNames(0),
+        resultGroupName: data?.resultGroupName,
+        resultWeight: normalizeSubdivisionWeight(data?.resultWeight),
       })
     }
   }
@@ -174,9 +186,14 @@ export function syncLocationItemToProject(
   if (existing) {
     existing.locationItemId = item.id
     existing.l1TemplateName = item.l1TemplateName
+    existing.resultGroupName = item.resultGroupName?.trim() || undefined
+    existing.resultWeight = normalizeSubdivisionWeight(item.resultWeight)
     applyCheckpointNamesToInspectionData(existing, names)
   } else {
-    sub.inspectionData[item.l1TemplateId] = createInspectionData(l1Template, names, item.id)
+    const data = createInspectionData(l1Template, names, item.id)
+    data.resultGroupName = item.resultGroupName?.trim() || undefined
+    data.resultWeight = normalizeSubdivisionWeight(item.resultWeight)
+    sub.inspectionData[item.l1TemplateId] = data
   }
 }
 

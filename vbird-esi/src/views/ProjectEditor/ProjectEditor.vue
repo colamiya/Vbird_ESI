@@ -12,7 +12,7 @@ import { useTemplateStore } from '@/stores/templateStore'
 import type { ProjectSubdivision, InspectionTableData, L2Template, DeductionItem, ProjectLocationItem } from '@/types'
 import InspectionTable from '@/components/InspectionTable.vue'
 import LocationNamesEditor from '@/components/LocationNamesEditor.vue'
-import { buildDeviceListRows, buildProjectCalcPreview, buildResultListRows } from '@/utils/projectCalc'
+import { buildDeviceListRows, buildProjectCalcPreview, buildResultListRowsWithGrades } from '@/utils/projectCalc'
 import {
   defaultCheckpointNames,
   ensureProjectLocationItems,
@@ -22,6 +22,9 @@ import {
   removeLocationItemFromProject,
   syncLocationItemToProject,
 } from '@/utils/projectStructure'
+import {
+  findMissingProjectRequirements,
+} from '@/utils/projectRequirement'
 import { generateId } from '@/utils/id'
 
 const route = useRoute()
@@ -69,6 +72,7 @@ const activeProjectTab = ref<'data' | 'locations' | 'results' | 'devices'>('data
 const saveStatus = ref<'saved' | 'saving' | 'unsaved' | 'error'>('saved')
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 const SAVE_DEBOUNCE_MS = 800
+let lastRequirementWarningKey = ''
 
 function scheduleSave() {
   saveStatus.value = 'unsaved'
@@ -82,9 +86,15 @@ async function doSave() {
   if (!project.value) return
   saveStatus.value = 'saving'
   try {
+    const missing = findMissingProjectRequirements(project.value, templateStore.l1Templates)
     project.value.updatedAt = new Date().toISOString()
     await projectStore.saveProject(project.value)
     saveStatus.value = 'saved'
+    const warningKey = missing.map(item => `${item.subdivisionName}/${item.l1Name}/${item.rowIndex}`).join('|')
+    if (missing.length > 0 && warningKey !== lastRequirementWarningKey) {
+      lastRequirementWarningKey = warningKey
+      ElMessage.warning(`仍有 ${missing.length} 项项目技术要求未填写；可继续保存，但导出前必须补齐。`)
+    }
   } catch (e) {
     console.error('保存失败:', e)
     saveStatus.value = 'error'
@@ -260,6 +270,8 @@ const locationDraft = ref({
   unit: '',
   quantity: 1,
   checkpointNames: defaultCheckpointNames(1),
+  resultGroupName: '',
+  resultWeight: 1,
 })
 
 const locationSelectableL2Templates = computed(() => selectableL2Templates.value.concat(
@@ -279,6 +291,8 @@ function openAddLocationDialog() {
     unit: '',
     quantity: 1,
     checkpointNames: defaultCheckpointNames(1),
+    resultGroupName: '',
+    resultWeight: 1,
   }
   showAddLocationDialog.value = true
 }
@@ -325,6 +339,8 @@ async function confirmAddLocationItem() {
     unit: locationDraft.value.unit.trim(),
     quantity: names.length,
     checkpointNames: names,
+    resultGroupName: locationDraft.value.resultGroupName.trim(),
+    resultWeight: locationDraft.value.resultWeight,
   }
   ensureProjectLocationItems(project.value)
   project.value.locationItems!.push(item)
@@ -479,7 +495,7 @@ const calcPreview = computed(() =>
 )
 
 const resultRows = computed(() =>
-  project.value ? buildResultListRows(project.value, templateStore.l1Templates) : []
+  project.value ? buildResultListRowsWithGrades(project.value, templateStore.l1Templates, templateStore.l2Templates) : []
 )
 
 const deviceRows = computed(() =>
@@ -692,6 +708,16 @@ watch(() => locationDraft.value.l2TemplateId, () => {
           <el-table-column type="index" label="#" width="56" />
           <el-table-column prop="l2TemplateName" label="分部工程" min-width="150" />
           <el-table-column prop="l1TemplateName" label="分项点检表" min-width="170" />
+          <el-table-column label="结果组合" width="150">
+            <template #default="{ row }">
+              <el-input v-model="row.resultGroupName" size="small" placeholder="同名合并" @change="syncProjectLocationItem(row)" />
+            </template>
+          </el-table-column>
+          <el-table-column label="权重" width="120">
+            <template #default="{ row }">
+              <el-input-number v-model="row.resultWeight" :min="0" :step="0.1" size="small" controls-position="right" @change="syncProjectLocationItem(row)" />
+            </template>
+          </el-table-column>
           <el-table-column label="单位" width="110">
             <template #default="{ row }">
               <el-input v-model="row.unit" size="small" @change="syncProjectLocationItem(row)" />
@@ -737,8 +763,10 @@ watch(() => locationDraft.value.l2TemplateId, () => {
           <el-table-column type="index" label="序号" width="70" />
           <el-table-column prop="subdivisionName" label="分部工程" min-width="160" />
           <el-table-column prop="l1Name" label="分项工程" min-width="180" />
+          <el-table-column prop="totalCount" label="设备总数" width="110" />
           <el-table-column prop="faultCount" label="故障台数" width="110" />
           <el-table-column prop="passRate" label="设备完好率" width="130" />
+          <el-table-column prop="scaleGrade" label="标度" width="110" />
         </el-table>
       </div>
 
@@ -754,6 +782,7 @@ watch(() => locationDraft.value.l2TemplateId, () => {
           <el-table-column prop="device.name" label="设备名称" min-width="160" />
           <el-table-column prop="device.model" label="设备型号" min-width="140" />
           <el-table-column prop="device.unit" label="单位" width="90" />
+          <el-table-column prop="device.serialNumber" label="设备编号" min-width="150" />
           <el-table-column prop="quantity" label="数量" width="90" />
           <el-table-column prop="device.purpose" label="设备用途" min-width="180" />
           <el-table-column prop="sourceL1Name" label="来源点检表" min-width="160" />
@@ -799,6 +828,22 @@ watch(() => locationDraft.value.l2TemplateId, () => {
             <el-select v-model="locationDraft.l1TemplateId" placeholder="请选择点检表" filterable style="width: 100%">
               <el-option v-for="tpl in locationDraftL1Templates" :key="tpl.id" :label="tpl.name" :value="tpl.id" />
             </el-select>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top: 12px">
+          <div class="form-field">
+            <label>结果组合</label>
+            <el-input v-model="locationDraft.resultGroupName" placeholder="同名点检表合并计算" />
+          </div>
+          <div class="form-field">
+            <label>组合权重</label>
+            <el-input-number
+              v-model="locationDraft.resultWeight"
+              :min="0"
+              :step="0.1"
+              controls-position="right"
+              style="width: 100%"
+            />
           </div>
         </div>
         <div class="form-row" style="margin-top: 12px">

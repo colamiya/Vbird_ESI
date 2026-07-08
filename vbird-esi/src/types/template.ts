@@ -34,7 +34,8 @@ export interface InspectionItem {
   id: string
   groupId: string        // 所属检查项目组（用于行合并, 如 "安全设施" 下有多行）
   groupName: string      // 检查项目名称，如 "安全设施"
-  requirement: string    // 技术要求，如 "灭火器配置是否符合要求"
+  requirement: string    // 技术要求；允许为空，空值表示项目中填写
+  inspectionMethod?: string // 检测方法/检查方式，用于检查体系结构导出
   validationType: ValidationType
   textOptions?: string[] // 文本类可选值，如 ["符合", "不符合"]
   numericRule?: NumericRule

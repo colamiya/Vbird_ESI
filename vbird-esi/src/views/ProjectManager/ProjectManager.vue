@@ -22,6 +22,10 @@ import {
   PROJECT_DATA_VERSION,
   syncLocationItemToProject,
 } from '@/utils/projectStructure'
+import {
+  findMissingProjectRequirements,
+  formatMissingProjectRequirements,
+} from '@/utils/projectRequirement'
 
 const router = useRouter()
 const projectStore = useProjectStore()
@@ -61,6 +65,8 @@ interface WizardRow {
   unit: string
   quantity: number
   checkpointNames: string[]
+  resultGroupName: string
+  resultWeight: number
   summaryWeight: number
 }
 
@@ -101,6 +107,8 @@ function prepareProjectWizard() {
         unit: '',
         quantity: 1,
         checkpointNames: defaultCheckpointNames(1),
+        resultGroupName: '',
+        resultWeight: 1,
         summaryWeight: getL3SubdivisionWeight(selectedL3, l2.id),
       })
     }))
@@ -148,6 +156,8 @@ async function handleCreateProject() {
       unit: row.unit.trim(),
       quantity: names.length,
       checkpointNames: names,
+      resultGroupName: row.resultGroupName.trim(),
+      resultWeight: row.resultWeight,
     }
     project.locationItems!.push(item)
     syncLocationItemToProject(project, item, l1, row.summaryWeight)
@@ -174,6 +184,15 @@ function openProject(project: Project) {
 const exportingId = ref<string | null>(null)
 
 async function handleExportExcel(project: Project) {
+  const missingRequirements = findMissingProjectRequirements(project, templateStore.l1Templates)
+  if (missingRequirements.length > 0) {
+    await ElMessageBox.alert(
+      `以下项目技术要求未填写，补齐后才能导出：\n\n${formatMissingProjectRequirements(missingRequirements)}`,
+      '导出前校验未通过',
+      { type: 'warning', confirmButtonText: '知道了' },
+    )
+    return
+  }
   exportingId.value = project.id
   try {
     const ok = await exportProjectToExcel(
@@ -401,6 +420,16 @@ onMounted(() => {
           </el-table-column>
           <el-table-column prop="l2TemplateName" label="分部工程" min-width="80" />
           <el-table-column prop="l1TemplateName" label="分项点检表" min-width="85" />
+          <el-table-column label="结果组合" width="130">
+            <template #default="{ row }">
+              <el-input v-model="row.resultGroupName" size="small" placeholder="同名合并" />
+            </template>
+          </el-table-column>
+          <el-table-column label="权重" width="100">
+            <template #default="{ row }">
+              <el-input-number v-model="row.resultWeight" :min="0" :step="0.1" size="small" controls-position="right" style="width: 100%" />
+            </template>
+          </el-table-column>
           <el-table-column label="单位" width="100">
             <template #default="{ row }">
               <el-input v-model="row.unit" size="small" placeholder="台/套" />

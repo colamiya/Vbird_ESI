@@ -1,11 +1,14 @@
 import type { DeviceItem, Project, ProjectSubdivision, InspectionTableData } from '@/types'
-import type { L1Template } from '@/types/template'
+import type { GradeThreshold, L1Template, L2Template } from '@/types/template'
 import { isEffectiveValue } from '@/utils/numericRule'
 
 export interface ProjectCalcL1Row {
   l1Id: string
   name: string
   isCritical: boolean
+  itemCount: number
+  sourceL1Ids: string[]
+  resultWeight: number
   totalCount: number
   faultCount: number
   passRate: string
@@ -44,8 +47,10 @@ export interface ProjectCalcOptions {
 export interface ResultListRow {
   subdivisionName: string
   l1Name: string
+  totalCount: number
   faultCount: number
   passRate: string
+  scaleGrade: string
   isCritical: boolean
 }
 
@@ -149,19 +154,46 @@ export function buildProjectCalcPreview(
 }
 
 export function buildResultListRows(project: Project, l1Templates: L1Template[]): ResultListRow[] {
+  return buildResultListRowsWithGrades(project, l1Templates)
+}
+
+export function buildResultListRowsWithGrades(
+  project: Project,
+  l1Templates: L1Template[],
+  l2Templates: L2Template[] = [],
+): ResultListRow[] {
   const rows: ResultListRow[] = []
   for (const sub of project.subdivisions) {
+    const l2Template = l2Templates.find(t => t.id === sub.l2TemplateId)
     for (const row of buildSubdivisionL1Rows(sub, l1Templates)) {
       rows.push({
         subdivisionName: sub.l2TemplateName,
         l1Name: row.name,
+        totalCount: row.totalCount,
         faultCount: row.faultCount,
         passRate: row.passRate,
+        scaleGrade: calcGradeByThresholds(row.passRateValue, l2Template?.scoring.gradeThresholds),
         isCritical: row.isCritical,
       })
     }
   }
   return rows
+}
+
+export function calcGradeByThresholds(
+  score: number | null,
+  thresholds: GradeThreshold[] | undefined,
+): string {
+  if (score === null) return '/'
+  const sorted = (thresholds ?? [])
+    .filter(item => item.label.trim())
+    .slice()
+    .sort((a, b) => b.minScore - a.minScore)
+  if (sorted.length > 0) {
+    const matched = sorted.find(item => score >= item.minScore)
+    return matched?.label ?? sorted[sorted.length - 1].label
+  }
+  return score >= 85 ? '优良' : score >= 70 ? '合格' : '不合格'
 }
 
 export function buildDeviceListRows(
@@ -199,18 +231,23 @@ export function buildDeviceListRows(
   return rows
 }
 
-function buildSubdivisionL1Rows(sub: ProjectSubdivision, l1Templates: L1Template[]): ProjectCalcL1Row[] {
-  return sub.selectedL1Ids.map(l1Id => {
+export function buildSubdivisionL1Rows(sub: ProjectSubdivision, l1Templates: L1Template[]): ProjectCalcL1Row[] {
+  const baseRows = sub.selectedL1Ids.map(l1Id => {
     const l1Tpl = l1Templates.find(t => t.id === l1Id)
     const l1Data = sub.inspectionData[l1Id]
     const isCritical = l1Tpl?.isCritical ?? false
     const name = l1Tpl ? getDisplayL1Name(l1Tpl) : getDisplayL1Name(l1Data?.l1TemplateName ?? '(未知)', isCritical)
+    const itemCount = l1Tpl?.inspectionItems.length ?? 0
+    const resultWeight = normalizeWeight(l1Data?.resultWeight)
 
     if (!l1Data) {
       return {
         l1Id,
         name,
         isCritical,
+        itemCount,
+        sourceL1Ids: [l1Id],
+        resultWeight,
         totalCount: 0,
         faultCount: 0,
         passRate: '/',
@@ -226,9 +263,47 @@ function buildSubdivisionL1Rows(sub: ProjectSubdivision, l1Templates: L1Template
       l1Id,
       name,
       isCritical,
+      itemCount,
+      sourceL1Ids: [l1Id],
+      resultWeight,
       totalCount,
       faultCount,
       passRate: calcRateFromCounts(totalCount, faultCount),
+      passRateValue,
+    }
+  })
+
+  const groups = new Map<string, ProjectCalcL1Row[]>()
+  for (const row of baseRows) {
+    const source = sub.inspectionData[row.l1Id]
+    const groupName = source?.resultGroupName?.trim()
+    const key = groupName ? `group:${groupName}` : `single:${row.l1Id}`
+    const list = groups.get(key) ?? []
+    list.push(row)
+    groups.set(key, list)
+  }
+
+  return [...groups.entries()].map(([key, rows]) => {
+    if (rows.length === 1 && key.startsWith('single:')) return rows[0]
+    const groupName = key.replace(/^group:/, '')
+    const totalCount = rows.reduce((sum, row) => sum + row.totalCount, 0)
+    const faultCount = rows.reduce((sum, row) => sum + row.faultCount, 0)
+    const itemCount = rows.reduce((sum, row) => sum + row.itemCount, 0)
+    const validRows = rows.filter(row => row.passRateValue !== null && row.resultWeight > 0)
+    const weightTotal = validRows.reduce((sum, row) => sum + row.resultWeight, 0)
+    const passRateValue = weightTotal > 0
+      ? validRows.reduce((sum, row) => sum + row.passRateValue! * row.resultWeight, 0) / weightTotal
+      : null
+    return {
+      l1Id: key,
+      name: groupName || rows.map(row => row.name).join(' + '),
+      isCritical: rows.some(row => row.isCritical),
+      itemCount,
+      sourceL1Ids: rows.flatMap(row => row.sourceL1Ids),
+      resultWeight: weightTotal || 1,
+      totalCount,
+      faultCount,
+      passRate: formatPercentValue(passRateValue),
       passRateValue,
     }
   })
@@ -251,9 +326,10 @@ function calcWeightedCriticalScore(rows: ProjectCalcL1Row[]): number | null {
 }
 
 function calcWeightedScore(rows: ProjectCalcL1Row[]): number {
-  const totalCount = rows.reduce((sum, row) => sum + row.totalCount, 0)
-  const faultCount = rows.reduce((sum, row) => sum + row.faultCount, 0)
-  return totalCount > 0 ? (1 - faultCount / totalCount) * 100 : 0
+  const validRows = rows.filter(row => row.totalCount > 0 && row.passRateValue !== null)
+  const totalCount = validRows.reduce((sum, row) => sum + row.totalCount, 0)
+  if (totalCount <= 0) return 0
+  return validRows.reduce((sum, row) => sum + row.passRateValue! * row.totalCount, 0) / totalCount
 }
 
 function calcRateFromCounts(totalCount: number, faultCount: number): string {

@@ -37,7 +37,7 @@ export function isCellEditable(color: CellColor): boolean {
 }
 
 /** 单元格数据校验类型 */
-export type ValidationType = 'text' | 'numeric'
+export type ValidationType = 'text' | 'numeric' | 'manual'
 
 /** 单元格位置 */
 export interface CellPosition {

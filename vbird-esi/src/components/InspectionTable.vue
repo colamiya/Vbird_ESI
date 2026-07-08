@@ -17,6 +17,13 @@ import {
   type SegmentInfo,
 } from '@/utils/segmentLayout'
 import { isEffectiveValue, isPassed } from '@/utils/numericRule'
+import {
+  ensureRequirementOverrides,
+  buildEffectiveInspectionItems,
+  getEffectiveRequirement,
+  getRequirementOverride,
+  needsProjectRequirement,
+} from '@/utils/projectRequirement'
 
 const props = defineProps<{
   template: L1Template
@@ -41,7 +48,61 @@ function undo() {
 }
 
 // ---- 检查项 ----
-const items = computed(() => props.template.inspectionItems)
+const items = computed(() => {
+  ensureRequirementOverrides(props.data, props.template.inspectionItems)
+  return props.template.inspectionItems
+})
+const effectiveItems = computed(() => buildEffectiveInspectionItems(props.template, props.data))
+
+function getEffectiveItem(rowIdx: number) {
+  return effectiveItems.value[rowIdx] ?? items.value[rowIdx]
+}
+
+function getRequirementDisplay(item: L1Template['inspectionItems'][number]): string {
+  return getEffectiveRequirement(item, props.data)
+}
+
+function updateRequirementOverride(item: L1Template['inspectionItems'][number], value: string) {
+  if (!needsProjectRequirement(item)) return
+  ensureRequirementOverrides(props.data, props.template.inspectionItems)
+  const override = getRequirementOverride(props.data, item)
+  override.requirement = value
+  emitUpdate()
+}
+
+function updateRequirementOverrideType(item: L1Template['inspectionItems'][number], value: 'text' | 'numeric') {
+  if (!needsProjectRequirement(item)) return
+  const override = getRequirementOverride(props.data, item)
+  override.validationType = value
+  if (value === 'numeric') {
+    override.numericRange = override.numericRange ?? { min: 0, max: 100 }
+    override.numericRule = {
+      clauses: [
+        { op: '>=', value: override.numericRange.min, join: 'AND' },
+        { op: '<=', value: override.numericRange.max },
+      ],
+    }
+  } else {
+    override.numericRange = undefined
+    override.numericRule = undefined
+  }
+  emitUpdate()
+}
+
+function updateRequirementRange(item: L1Template['inspectionItems'][number], edge: 'min' | 'max', value: number | undefined) {
+  const override = getRequirementOverride(props.data, item)
+  const range = override.numericRange ?? { min: 0, max: 100 }
+  range[edge] = Number.isFinite(Number(value)) ? Number(value) : range[edge]
+  override.validationType = 'numeric'
+  override.numericRange = range
+  override.numericRule = {
+    clauses: [
+      { op: '>=', value: range.min, join: 'AND' },
+      { op: '<=', value: range.max },
+    ],
+  }
+  emitUpdate()
+}
 
 // ---- 行合并 ----
 interface GroupMerge { groupId: string; groupName: string; startIdx: number; count: number }
@@ -647,11 +708,12 @@ function getFillOptions(): string[] {
 const validationErrors = reactive<Record<string, string>>({})
 function updateCell(rowIdx: number, cpIdx: number, value: string|number|null) {
   ensureRow(rowIdx)
-  const item = items.value[rowIdx], key=`${rowIdx}-${cpIdx}`
-  if (value && value!=='/' && item?.validationType==='numeric') {
+  const key = `${rowIdx}-${cpIdx}`
+  const effectiveItem = getEffectiveItem(rowIdx)
+  if (value && value!=='/' && effectiveItem?.validationType==='numeric') {
     const num = Number(value); if (isNaN(num)) { validationErrors[key]='请输入数值'; return }
-    if (item.numericRange) {
-      if (num<item.numericRange.min||num>item.numericRange.max) validationErrors[key]=`范围: ${item.numericRange.min}-${item.numericRange.max}`
+    if (effectiveItem.numericRange) {
+      if (num<effectiveItem.numericRange.min||num>effectiveItem.numericRange.max) validationErrors[key]=`范围: ${effectiveItem.numericRange.min}-${effectiveItem.numericRange.max}`
       else delete validationErrors[key]
     } else delete validationErrors[key]
     props.data.values[rowIdx][cpIdx]=num
@@ -674,10 +736,26 @@ function getTextOptions(item: typeof items.value[number]): string[] {
   if (item.validationType==='text') return ['符合', '不符合', '/']
   return []
 }
-function shouldUseSelect(rowIdx: number) { return getTextOptions(items.value[rowIdx]).length>0 }
+function shouldUseSelect(rowIdx: number) { return getTextOptions(getEffectiveItem(rowIdx)).length>0 }
 function displayValue(rowIdx: number, cpIdx: number): string {
   const val = props.data.values[rowIdx]?.[cpIdx]
   return (val===null||val===undefined||val==='') ? '' : String(val)
+}
+function manualKey(rowIdx: number, cpIdx: number): string { return `${rowIdx}-${cpIdx}` }
+function manualJudgement(rowIdx: number, cpIdx: number): 'pass' | 'fail' {
+  return props.data.manualJudgements?.[manualKey(rowIdx, cpIdx)] ?? 'pass'
+}
+function updateManualJudgement(rowIdx: number, cpIdx: number, value: 'pass' | 'fail') {
+  props.data.manualJudgements = props.data.manualJudgements ?? {}
+  props.data.manualJudgements[manualKey(rowIdx, cpIdx)] = value
+  emitUpdate()
+}
+function isCellPassed(rowIdx: number, cpIdx: number): boolean {
+  const item = getEffectiveItem(rowIdx)
+  const value = props.data.values[rowIdx]?.[cpIdx]
+  if (!isEffectiveValue(value)) return false
+  if (item?.validationType === 'manual') return manualJudgement(rowIdx, cpIdx) !== 'fail'
+  return item ? isPassed(item, value) : false
 }
 
 // ============================
@@ -685,12 +763,13 @@ function displayValue(rowIdx: number, cpIdx: number): string {
 // ============================
 function rowPassRate(rowIdx: number): string {
   const row=props.data.values[rowIdx]; if (!row||!row.length) return '-'
-  const item = items.value[rowIdx]
+  const item = getEffectiveItem(rowIdx)
   let t=0,p=0
-  for (const v of row) {
+  for (let cpIdx = 0; cpIdx < row.length; cpIdx++) {
+    const v = row[cpIdx]
     if (isEffectiveValue(v)) {
       t++
-      if (item && isPassed(item, v)) p++
+      if (item && cpIdx >= 0 && isCellPassed(rowIdx, cpIdx)) p++
     }
   }
   return t===0?'-':((p/t)*100).toFixed(1)+'%'
@@ -890,7 +969,44 @@ onBeforeUnmount(() => {
                 <td v-else-if="!isGroupMergedRow(rowIdx)" class="cell-red fixed-col col-seq">{{ rowIdx + 1 }}</td>
                 <td v-if="isGroupFirstRow(rowIdx)" class="cell-yellow fixed-col col-item" :rowspan="getRowspan(rowIdx)">{{ item.groupName }}</td>
                 <td v-else-if="!isGroupMergedRow(rowIdx)" class="cell-yellow fixed-col col-item">{{ item.groupName }}</td>
-                <td class="cell-yellow fixed-col col-req">{{ item.requirement }}</td>
+                <td class="cell-yellow fixed-col col-req">
+                  <div v-if="needsProjectRequirement(item)" class="requirement-editor">
+                    <select
+                      class="requirement-type"
+                      :value="getRequirementOverride(data, item).validationType ?? 'text'"
+                      @mousedown.stop
+                      @change="(e) => updateRequirementOverrideType(item, (e.target as HTMLSelectElement).value as 'text' | 'numeric')"
+                    >
+                      <option value="text">文本</option>
+                      <option value="numeric">数值范围</option>
+                    </select>
+                    <textarea
+                      class="requirement-input"
+                      :value="getRequirementDisplay(item)"
+                      placeholder="填写项目技术要求"
+                      rows="2"
+                      @keydown.stop
+                      @mousedown.stop
+                      @input="(e) => updateRequirementOverride(item, (e.target as HTMLTextAreaElement).value)"
+                    ></textarea>
+                    <div v-if="getRequirementOverride(data, item).validationType === 'numeric'" class="requirement-range">
+                      <input
+                        type="number"
+                        :value="getRequirementOverride(data, item).numericRange?.min ?? 0"
+                        @mousedown.stop
+                        @change="(e) => updateRequirementRange(item, 'min', Number((e.target as HTMLInputElement).value))"
+                      />
+                      <span>至</span>
+                      <input
+                        type="number"
+                        :value="getRequirementOverride(data, item).numericRange?.max ?? 100"
+                        @mousedown.stop
+                        @change="(e) => updateRequirementRange(item, 'max', Number((e.target as HTMLInputElement).value))"
+                      />
+                    </div>
+                  </div>
+                  <span v-else>{{ getRequirementDisplay(item) }}</span>
+                </td>
                 <template v-for="(seg, segIdxInRow) in gridRow" :key="seg.index">
                   <td v-if="segIdxInRow > 0" class="seg-divider-td"></td>
                   <td
@@ -917,7 +1033,7 @@ onBeforeUnmount(() => {
                         @keydown="(e) => handleEditKeydown(e, rowIdx, cpIdx)"
                       >
                         <option value="">-</option>
-                        <option v-for="opt in getTextOptions(item)" :key="opt" :value="opt">{{ opt }}</option>
+                        <option v-for="opt in getTextOptions(getEffectiveItem(rowIdx))" :key="opt" :value="opt">{{ opt }}</option>
                       </select>
                       <input
                         v-else-if="editRow === rowIdx && editCol === cpIdx"
@@ -925,7 +1041,7 @@ onBeforeUnmount(() => {
                         :class="{ 'cell-error': validationErrors[`${rowIdx}-${cpIdx}`] }"
                         :data-edit="`${rowIdx}-${cpIdx}`"
                         :value="data.values[rowIdx]?.[cpIdx] ?? ''"
-                        :placeholder="item.validationType === 'numeric' ? '数值' : '输入值'"
+                        :placeholder="getEffectiveItem(rowIdx).validationType === 'numeric' ? '数值' : '输入值'"
                         :title="validationErrors[`${rowIdx}-${cpIdx}`] || ''"
                         @mousedown.stop
                         @change="(e) => updateCell(rowIdx, cpIdx, (e.target as HTMLInputElement).value || null)"
@@ -933,6 +1049,17 @@ onBeforeUnmount(() => {
                         @blur="exitEditMode"
                       />
                       <span v-else class="cell-display">{{ displayValue(rowIdx, cpIdx) }}</span>
+                      <select
+                        v-if="getEffectiveItem(rowIdx).validationType === 'manual' && isEffectiveValue(data.values[rowIdx]?.[cpIdx]) && !(editRow === rowIdx && editCol === cpIdx)"
+                        class="manual-judgement"
+                        :value="manualJudgement(rowIdx, cpIdx)"
+                        @mousedown.stop
+                        @click.stop
+                        @change="(e) => updateManualJudgement(rowIdx, cpIdx, (e.target as HTMLSelectElement).value as 'pass' | 'fail')"
+                      >
+                        <option value="pass">合格</option>
+                        <option value="fail">不合格</option>
+                      </select>
                       <div
                         v-if="isFillHandleCorner(rowIdx, cpIdx)"
                         class="fill-handle"
@@ -1130,6 +1257,13 @@ onBeforeUnmount(() => {
 /* 编辑态 input */
 .cell-input { background: rgba(34,197,94,0.1); border: none; outline: 1px solid var(--color-success); color: var(--text-primary); text-align: center; font-size: 12px; width: 100%; padding: 2px; }
 .cell-input::placeholder { color: var(--text-tertiary); font-size: 11px; }
+.requirement-editor { display: flex; flex-direction: column; gap: 4px; }
+.requirement-type { width: 100%; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: #ffffff; color: var(--text-primary); font-size: 11px; padding: 2px 4px; }
+.requirement-input { width: 100%; min-height: 42px; resize: vertical; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: #fffdf5; color: var(--text-primary); font-size: 11px; line-height: 1.4; padding: 4px 6px; outline: none; }
+.requirement-input:focus { border-color: var(--color-warning); box-shadow: 0 0 0 2px hsla(38, 80%, 50%, 0.12); }
+.requirement-range { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-secondary); }
+.requirement-range input { width: 64px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 2px 4px; font-size: 11px; }
+.manual-judgement { margin-top: 3px; width: 72px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: #fff; color: var(--text-primary); font-size: 11px; padding: 1px 3px; }
 .cell-error { outline: 1px solid var(--color-danger) !important; background: rgba(239,68,68,0.08) !important; }
 
 /* 编辑态 select */

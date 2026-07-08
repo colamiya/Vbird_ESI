@@ -210,7 +210,7 @@ function applyLastPageSevenSlotMetrics(
     lastPage.length,
     Math.max(
       1,
-      Math.ceil(Math.max(0, remainingIndices.length - L1_PRINT_LAYOUT.maxLocPerSeg) / (L1_PRINT_LAYOUT.maxLocPerSeg + 1)) + 1,
+      Math.ceil(remainingIndices.length / (L1_PRINT_LAYOUT.maxLocPerSeg + 1)),
     ),
   )
   lastPage.splice(usedSlotCount)
@@ -219,9 +219,7 @@ function applyLastPageSevenSlotMetrics(
 
   lastPage.forEach((metric, slotIndex) => {
     const isFinalSlot = slotIndex === lastPage.length - 1
-    const capacity = isFinalSlot
-      ? L1_PRINT_LAYOUT.maxLocPerSeg
-      : L1_PRINT_LAYOUT.maxLocPerSeg + 1
+    const capacity = L1_PRINT_LAYOUT.maxLocPerSeg + 1
     const cpIndices = remainingIndices.slice(offset, offset + capacity)
     offset += cpIndices.length
 
@@ -229,12 +227,12 @@ function applyLastPageSevenSlotMetrics(
     metric.startCol = cpIndices[0] ?? totalCols
     metric.endCol = cpIndices[cpIndices.length - 1] ?? (totalCols - 1)
     metric.isLastEffectiveSeg = isFinalSlot
-    metric.hasSummarySlot = isFinalSlot
+    metric.hasSummarySlot = isFinalSlot && cpIndices.length <= L1_PRINT_LAYOUT.maxLocPerSeg
 
     const notesText = isFinalSlot ? (data.notes ?? '') : '/'
     const baseNotesRowHeight = estimateWrappedRowHeight(
       notesText,
-      getL1NotesContentWidth(isFinalSlot),
+      getL1NotesContentWidth(metric.hasSummarySlot),
       L1_PRINT_LAYOUT.dataFontSize,
       L1_PRINT_LAYOUT.notesRowH,
     )

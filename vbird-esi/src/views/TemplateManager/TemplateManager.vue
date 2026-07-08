@@ -146,12 +146,13 @@ const deviceForm = ref({
   name: '',
   model: '',
   unit: '',
+  serialNumber: '',
   purpose: '',
 })
 
 function openCreateDevice() {
   editingDevice.value = null
-  deviceForm.value = { name: '', model: '', unit: '', purpose: '' }
+  deviceForm.value = { name: '', model: '', unit: '', serialNumber: '', purpose: '' }
   showDeviceDialog.value = true
 }
 
@@ -161,6 +162,7 @@ function openEditDevice(device: DeviceItem) {
     name: device.name,
     model: device.model,
     unit: device.unit,
+    serialNumber: device.serialNumber ?? '',
     purpose: device.purpose,
   }
   showDeviceDialog.value = true
@@ -177,6 +179,7 @@ async function saveDevice() {
     name: deviceForm.value.name.trim(),
     model: deviceForm.value.model.trim(),
     unit: deviceForm.value.unit.trim(),
+    serialNumber: deviceForm.value.serialNumber.trim(),
     purpose: deviceForm.value.purpose.trim(),
     createdAt: editingDevice.value?.createdAt ?? now,
     updatedAt: now,
@@ -406,6 +409,7 @@ onMounted(() => { store.loadAll() })
           </div>
           <div class="card-meta">
             <span v-if="device.model" class="meta-tag">{{ device.model }}</span>
+            <span v-if="device.serialNumber" class="meta-info">编号：{{ device.serialNumber }}</span>
             <span v-if="device.unit" class="meta-info">单位：{{ device.unit }}</span>
           </div>
           <div v-if="device.purpose" class="device-purpose">{{ device.purpose }}</div>
@@ -436,6 +440,12 @@ onMounted(() => { store.loadAll() })
             <label>单位</label>
             <el-input v-model="deviceForm.unit" placeholder="台/套" />
           </div>
+          <div class="form-field">
+            <label>设备编号</label>
+            <el-input v-model="deviceForm.serialNumber" />
+          </div>
+        </div>
+        <div class="form-row" style="margin-top: 12px">
           <div class="form-field">
             <label>设备用途</label>
             <el-input v-model="deviceForm.purpose" />

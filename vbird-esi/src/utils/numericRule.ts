@@ -63,6 +63,9 @@ export function isPassed(item: InspectionItem, raw: unknown): boolean {
     return evalNumericRule(n, rule)
   }
 
+  if (item.validationType === 'manual') {
+    return true
+  }
+
   return false
 }
-

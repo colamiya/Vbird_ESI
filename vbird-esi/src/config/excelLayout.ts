@@ -129,8 +129,9 @@ export const EXCEL_LAYOUT_CONFIG = {
       data: 25,
     },
     locationColWidths: [11.63, 14.75, 8.91, 8.25, 8.5, 9, 9, 9, 9, 9],
-    resultColWidths: [11.63, 14.75, 13.38, 8.88, 18.25],
-    deviceColWidths: [11.63, 14.75, 13.38, 8.88, 12.5, 22.75],
+    resultColWidths: [11.63, 14.75, 13.38, 8.88, 8.88, 18.25, 12.5],
+    inspectionSystemColWidths: [11.63, 14.75, 12.63, 32.38, 31.5],
+    deviceColWidths: [11.63, 14.75, 13.38, 8.88, 12.5, 13, 22.75],
   },
 
   cover: {
@@ -143,6 +144,7 @@ export const EXCEL_LAYOUT_CONFIG = {
     calcBg: 'FFE8E8E8',
     white: 'FFFFFFFF',
     black: 'FF000000',
+    yellow: 'FFFFFF00',
     subNameBg: 'FFFFC000',
   },
 

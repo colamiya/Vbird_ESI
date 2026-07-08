@@ -20,6 +20,19 @@ export interface Checkpoint {
   width?: number                 // 列宽（px），用户拖拽调整后存储
 }
 
+export interface ProjectRequirementOverride {
+  requirement: string
+  validationType?: 'text' | 'numeric'
+  numericRule?: import('./template').NumericRule
+  numericRange?: {
+    min: number
+    max: number
+  }
+}
+
+export type ProjectRequirementOverrides = Record<string, string | ProjectRequirementOverride>
+export type ManualJudgement = 'pass' | 'fail'
+
 /** L1 表实例数据（项目中每张点检表的实际数据） */
 export interface InspectionTableData {
   /** 使用的 L1 模板 ID */
@@ -32,6 +45,10 @@ export interface InspectionTableData {
   checkpoints: Checkpoint[]
   /** 数据矩阵 [行索引][检查点索引] */
   values: (string | number | null)[][]
+  /** 项目级技术要求覆盖值：key = InspectionItem.id，仅模板技术要求为空的检查项需要填写 */
+  requirementOverrides?: ProjectRequirementOverrides
+  /** 手动判定结果：key = `${rowIdx}-${checkpointIdx}`，未设置时默认合格 */
+  manualJudgements?: Record<string, ManualJudgement>
   /** 故障行数据 [检查点索引] */
   faultValues: (string | null)[]
   /** 备注文本 */
@@ -54,6 +71,10 @@ export interface InspectionTableData {
   colWidths?: number[]
   /** 每个数据行的行高（px），可选，用户拖拽调整后存储 */
   rowHeights?: number[]
+  /** 结果组合名称：同一分部下多个 L1 填同名后按权重合并展示最终完好率 */
+  resultGroupName?: string
+  /** 结果组合权重，默认 1 */
+  resultWeight?: number
 }
 
 /** 扣分数据：key = DeductionItem.id, value = 扣分值 */
@@ -85,6 +106,8 @@ export interface ProjectLocationItem {
   unit: string
   quantity: number
   checkpointNames: string[]
+  resultGroupName?: string
+  resultWeight?: number
 }
 
 /** 项目基本信息 */

@@ -71,6 +71,7 @@ function addInspectionItem() {
     groupId: generateId(),
     groupName: lastGroup,
     requirement: '',
+    inspectionMethod: '',
     validationType: 'text' as ValidationType,
     textOptions: [...FIXED_TEXT_OPTIONS],
     rowHeight: 30,
@@ -97,12 +98,14 @@ function handleSave() {
       ElMessage.warning(`第 ${i + 1} 行缺少检查项目名称`)
       return
     }
-    if (!item.requirement.trim()) {
-      ElMessage.warning(`第 ${i + 1} 行缺少技术要求`)
-      return
-    }
+    item.requirement = `${item.requirement ?? ''}`.trim()
+    item.inspectionMethod = `${item.inspectionMethod ?? ''}`.trim()
     if (item.validationType === 'text') {
       item.textOptions = [...FIXED_TEXT_OPTIONS]
+      item.numericRule = undefined
+      item.numericRange = undefined
+    } else if (item.validationType === 'manual') {
+      item.textOptions = undefined
       item.numericRule = undefined
       item.numericRange = undefined
     } else if (item.validationType === 'numeric') {
@@ -235,6 +238,12 @@ function onTypeChange(item: InspectionItem) {
     item.numericRange = undefined
     return
   }
+  if (item.validationType === 'manual') {
+    item.textOptions = undefined
+    item.numericRule = undefined
+    item.numericRange = undefined
+    return
+  }
   item.textOptions = undefined
   ensureNumericRule(item)
 }
@@ -290,6 +299,7 @@ function onTypeChange(item: InspectionItem) {
           <span class="col-seq">#</span>
           <span class="col-group">检查项目名称</span>
           <span class="col-req">技术要求</span>
+          <span class="col-method">检测方法</span>
           <span class="col-device">关联设备</span>
           <span class="col-options">下拉选项</span>
           <span class="col-type">类型</span>
@@ -311,7 +321,13 @@ function onTypeChange(item: InspectionItem) {
             <el-input
               v-model="item.requirement"
               class="col-req"
-              placeholder="技术要求描述"
+              placeholder="留空则项目中填写"
+              size="small"
+            />
+            <el-input
+              v-model="item.inspectionMethod"
+              class="col-method"
+              placeholder="检测方法"
               size="small"
             />
             <el-select
@@ -330,7 +346,7 @@ function onTypeChange(item: InspectionItem) {
               />
             </el-select>
             <span class="col-options fixed-options">
-              {{ item.validationType === 'text' ? '符合, 不符合, /' : '-' }}
+              {{ item.validationType === 'text' ? '符合, 不符合, /' : item.validationType === 'manual' ? '自由输入+手动判定' : '-' }}
             </span>
             <el-select
               v-model="item.validationType"
@@ -340,6 +356,7 @@ function onTypeChange(item: InspectionItem) {
             >
               <el-option label="文本" value="text" />
               <el-option label="数值" value="numeric" />
+              <el-option label="手动判定" value="manual" />
             </el-select>
             <el-button
               class="col-action"
@@ -506,7 +523,12 @@ function onTypeChange(item: InspectionItem) {
 }
 
 .col-req {
-  flex: 3;
+  flex: 2.5;
+  min-width: 0;
+}
+
+.col-method {
+  flex: 1.6;
   min-width: 0;
 }
 

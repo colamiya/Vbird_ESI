@@ -4,6 +4,7 @@ export interface DeviceItem {
   name: string
   model: string
   unit: string
+  serialNumber?: string
   purpose: string
   createdAt: string
   updatedAt: string

@@ -19,8 +19,6 @@
  */
 
 import ExcelJS from 'exceljs'
-import { invoke } from '@tauri-apps/api/core'
-import { save } from '@tauri-apps/plugin-dialog'
 import { EXCEL_LAYOUT_CONFIG as LAYOUT_CONFIG } from '@/config/excelLayout'
 import type { Project, ProjectLocationItem, ProjectSubdivision, InspectionTableData } from '@/types/project'
 import type { DeviceItem } from '@/types/device'
@@ -29,9 +27,10 @@ import { isEffectiveValue, isPassed } from '@/utils/numericRule'
 import {
   buildDeviceListRows,
   buildProjectCalcPreview,
+  buildSubdivisionL1Rows,
+  calcGradeByThresholds,
   calcTotalPassRate,
   calcSubdivisionScore,
-  getDisplayL1Name,
 } from '@/utils/projectCalc'
 import {
   buildL1ExportPrintPages,
@@ -42,6 +41,11 @@ import {
   pxToPoints,
 } from '@/utils/l1PrintLayout'
 import { getL3SubdivisionWeight } from '@/utils/projectStructure'
+import {
+  buildEffectiveInspectionItems,
+  findMissingProjectRequirements,
+  formatMissingProjectRequirements,
+} from '@/utils/projectRequirement'
 
 // Excel 列宽、页边距、缩放、行高和比例统一配置在 src/config/excelLayout.ts。
 
@@ -56,6 +60,15 @@ export async function exportProjectToExcel(
   deviceItems: DeviceItem[] = [],
   l3Templates: L3Template[] = [],
 ): Promise<boolean> {
+  const missingRequirements = findMissingProjectRequirements(project, l1Templates)
+  if (missingRequirements.length > 0) {
+    throw new Error(`以下项目技术要求未填写，补齐后才能导出：\n${formatMissingProjectRequirements(missingRequirements)}`)
+  }
+  const [{ invoke }, { save }] = await Promise.all([
+    import('@tauri-apps/api/core'),
+    import('@tauri-apps/plugin-dialog'),
+  ])
+
   const filePath = await save({
     title: '导出 Excel',
     defaultPath: `${project.name}.xlsx`,
@@ -63,6 +76,24 @@ export async function exportProjectToExcel(
   })
   if (!filePath) return false
 
+  const workbook = buildProjectWorkbook(project, l1Templates, l2Templates, deviceItems, l3Templates)
+  const buffer = await workbook.xlsx.writeBuffer()
+  const uint8 = new Uint8Array(buffer as ArrayBuffer)
+  await invoke('write_binary_file', {
+    path: filePath,
+    data: Array.from(uint8),
+  })
+
+  return true
+}
+
+export function buildProjectWorkbook(
+  project: Project,
+  l1Templates: L1Template[],
+  l2Templates: L2Template[],
+  deviceItems: DeviceItem[] = [],
+  l3Templates: L3Template[] = [],
+): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook()
   workbook.creator = 'ESI'
   workbook.created = new Date()
@@ -71,7 +102,8 @@ export async function exportProjectToExcel(
 
   buildL3Sheet(workbook, project, l1Templates, l3Template)
   buildLocationListSheet(workbook, project)
-  buildResultListSheet(workbook, project, l1Templates, l3Template)
+  buildInspectionSystemSheet(workbook, project, l1Templates)
+  buildResultListSheet(workbook, project, l1Templates, l2Templates, l3Template)
   buildDeviceListSheet(workbook, project, l1Templates, deviceItems)
 
   project.subdivisions.forEach((sub, subIdx) => {
@@ -90,14 +122,34 @@ export async function exportProjectToExcel(
     }
   })
 
-  const buffer = await workbook.xlsx.writeBuffer()
-  const uint8 = new Uint8Array(buffer as ArrayBuffer)
-  await invoke('write_binary_file', {
-    path: filePath,
-    data: Array.from(uint8),
-  })
+  sanitizeWorkbookPageSetup(workbook)
 
-  return true
+  return workbook
+}
+
+function sanitizeWorkbookPageSetup(workbook: ExcelJS.Workbook) {
+  workbook.worksheets.forEach(sheet => {
+    const pageSetup = sheet.pageSetup as ExcelJS.Worksheet['pageSetup'] & {
+      horizontalDpi?: number
+      verticalDpi?: number
+      scale?: number
+      fitToWidth?: number
+      fitToHeight?: number
+      usePrinterDefaults?: boolean
+    }
+    delete pageSetup.horizontalDpi
+    delete pageSetup.verticalDpi
+    delete pageSetup.usePrinterDefaults
+
+    if (pageSetup.fitToPage) {
+      delete pageSetup.scale
+      if (pageSetup.fitToWidth === 1) delete pageSetup.fitToWidth
+    } else {
+      delete pageSetup.scale
+      delete pageSetup.fitToWidth
+      delete pageSetup.fitToHeight
+    }
+  })
 }
 
 // ============================================================
@@ -122,12 +174,16 @@ function buildL1Sheet(
   const sheet = workbook.addWorksheet(uniqueSheetName(workbook, template.name), {
     pageSetup: { ...L1_WORKSHEET_PAGE_SETUP },
   })
-  const items = template.inspectionItems
-  const pages = buildL1ExportPrintPages(template, data)
+  const effectiveTemplate: L1Template = {
+    ...template,
+    inspectionItems: buildEffectiveInspectionItems(template, data),
+  }
+  const items = effectiveTemplate.inspectionItems
+  const pages = buildL1ExportPrintPages(effectiveTemplate, data)
 
   if (pages.length === 0) return
 
-  const worksheetLayout = buildL1WorksheetLayout(template, data, pages)
+  const worksheetLayout = buildL1WorksheetLayout(effectiveTemplate, data, pages)
 
   worksheetLayout.slotGapRows.forEach(row => {
     sheet.getRow(row).height = L1_PRINT_LAYOUT.pageGapPt
@@ -139,14 +195,19 @@ function buildL1Sheet(
 
     for (let slotIndex = 0; slotIndex < worksheetLayout.maxSegmentsPerPage; slotIndex++) {
       const seg = page.segments[slotIndex]
+      if (!seg) continue
+
       const hasSummarySlot = seg?.hasSummarySlot ?? false
       const locationSlotCount = isLastPage && !hasSummarySlot
         ? LAYOUT_CONFIG.l1.maxLocPerSeg + 1
         : LAYOUT_CONFIG.l1.maxLocPerSeg
+      const notesMergeEndRow = seg.isLastEffectiveSeg
+        ? worksheetLayout.totalRows
+        : undefined
 
       writeL1SegmentBody(
         sheet,
-        template,
+        effectiveTemplate,
         items,
         data,
         seg?.cpIndices ?? [],
@@ -157,6 +218,7 @@ function buildL1Sheet(
         hasSummarySlot,
         seg?.isLastEffectiveSeg ?? false,
         worksheetLayout.slotNotesRowHeights[slotIndex],
+        notesMergeEndRow,
       )
     }
   })
@@ -207,6 +269,7 @@ function writeL1SegmentBody(
   hasSummarySlot = false,
   isLastEffectiveSeg = false,
   notesRowHeight: number = LAYOUT_CONFIG.l1.notesRowH,
+  notesMergeEndRow?: number,
 ): number {
   const cfg = LAYOUT_CONFIG.l1
   const sc = startCol
@@ -306,7 +369,7 @@ function writeL1SegmentBody(
 
     if (hasSummarySlot) {
       const rateStr = isLastEffectiveSeg
-        ? calcRowPassRate(items[rowIdx], data.values[rowIdx], allCpIndices)
+        ? calcRowPassRate(items[rowIdx], data.values[rowIdx], allCpIndices, data, rowIdx)
         : '/'
       setCell(sheet, r, summaryCol, rateStr, false, fnt.dataSize, 'center')
     }
@@ -350,23 +413,30 @@ function writeL1SegmentBody(
     r++
   }
 
-  setCell(sheet, r, rc, '设备完好率', false, fnt.dataSize, 'center')
-  setCell(sheet, r, dc, '设备完好率', false, fnt.dataSize, 'center')
-  sheet.mergeCells(r, dc, r, dataHeaderEndCol)
-  if (finalSummaryCol) {
-    const totalRate = isLastEffectiveSeg ? calcTotalPassRate(data, allCpIndices, items.length) : '/'
-    setCell(sheet, r, summaryCol, totalRate, false, fnt.dataSize, 'center')
+  if (isLastEffectiveSeg) {
+    setCell(sheet, r, rc, '设备完好率', false, fnt.dataSize, 'center')
+    setCell(sheet, r, dc, '设备完好率', false, fnt.dataSize, 'center')
+    sheet.mergeCells(r, dc, r, dataHeaderEndCol)
+    if (finalSummaryCol) {
+      const totalRate = calcTotalPassRate(data, allCpIndices, items.length)
+      setCell(sheet, r, summaryCol, totalRate, false, fnt.dataSize, 'center')
+    }
+    sheet.getRow(r).height = cfg.passRateRowH
+    r++
   }
-  sheet.getRow(r).height = cfg.passRateRowH
-  r++
 
-  const notes = isLastEffectiveSeg ? (data.notes ?? '') : '/'
-  const notesEndCol = hasSummarySlot ? summaryCol : segmentEndCol
-  setCell(sheet, r, rc, '备注', false, fnt.dataSize, 'center')
-  setCell(sheet, r, dc, notes, false, fnt.dataSize, 'center')
-  sheet.mergeCells(r, dc, r, notesEndCol)
-  sheet.getRow(r).height = notesRowHeight
-  r++
+  if (isLastEffectiveSeg) {
+    const notes = data.notes ?? ''
+    const notesEndCol = hasSummarySlot ? summaryCol : segmentEndCol
+    const notesStartRow = r
+    const notesEndRow = Math.max(notesStartRow, notesMergeEndRow ?? notesStartRow)
+    setCell(sheet, r, rc, '备注', false, fnt.dataSize, 'center')
+    setCell(sheet, r, dc, notes, false, fnt.dataSize, 'center')
+    sheet.mergeCells(notesStartRow, rc, notesEndRow, rc)
+    sheet.mergeCells(notesStartRow, dc, notesEndRow, notesEndCol)
+    sheet.getRow(r).height = notesRowHeight
+    r = notesEndRow + 1
+  }
 
   const tailEndRow = r - 1
   const leftStartRow = template.faultRow?.enabled ? tailStartRow : (tailStartRow + 0)
@@ -470,25 +540,14 @@ function buildL2Sheet(
   r++
 
   const dataRowStart = r
-  sub.selectedL1Ids.forEach((l1Id, idx) => {
-    const l1Tpl = l1Templates.find(t => t.id === l1Id)
-    const l1Data = sub.inspectionData[l1Id]
-    const l1Name = l1Tpl ? getDisplayL1Name(l1Tpl) : (l1Data?.l1TemplateName ?? '(未知)')
-    const itemCount = l1Tpl?.inspectionItems.length ?? 0
+  buildSubdivisionL1Rows(sub, l1Templates).forEach((row, idx) => {
 
     setCell(sheet, r, 1, idx + 1, false, LAYOUT_CONFIG.font.headerSize, 'center')
-    setCell(sheet, r, 2, l1Name, false, LAYOUT_CONFIG.font.headerSize, 'left')
+    setCell(sheet, r, 2, row.name, false, LAYOUT_CONFIG.font.headerSize, 'left')
     sheet.mergeCells(r, 2, r, 3)
     applyBorderOnly(sheet.getCell(r, 3))
-    setCell(sheet, r, 4, itemCount, false, LAYOUT_CONFIG.font.headerSize, 'center')
-
-    if (l1Data && l1Tpl) {
-      const allCpIndices = l1Data.checkpoints.map((_, i) => i)
-      const rate = calcTotalPassRate(l1Data, allCpIndices, l1Tpl.inspectionItems.length)
-      setCell(sheet, r, 5, rate, false, LAYOUT_CONFIG.font.headerSize, 'center')
-    } else {
-      setCell(sheet, r, 5, '/', false, LAYOUT_CONFIG.font.headerSize, 'center')
-    }
+    setCell(sheet, r, 4, row.itemCount, false, LAYOUT_CONFIG.font.headerSize, 'center')
+    setCell(sheet, r, 5, row.passRate, false, LAYOUT_CONFIG.font.headerSize, 'center')
     sheet.mergeCells(r, 5, r, 7)
     for (let c = 6; c <= 7; c++) applyBorderOnly(sheet.getCell(r, c))
     setCell(sheet, r, 8, '', false, LAYOUT_CONFIG.font.headerSize, 'center')
@@ -707,19 +766,76 @@ function buildLocationListSheet(workbook: ExcelJS.Workbook, project: Project) {
   applyListSheetPageSetup(sheet, colEnd, Math.max(3, row - 1))
 }
 
+function buildInspectionSystemSheet(
+  workbook: ExcelJS.Workbook,
+  project: Project,
+  l1Templates: L1Template[],
+) {
+  const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '检查体系结构'))
+  const colEnd = 5
+  LAYOUT_CONFIG.list.inspectionSystemColWidths.forEach((w, idx) => { sheet.getColumn(idx + 1).width = w })
+  buildListSheetTitle(sheet, '检查内容及方法清单', colEnd, project.info.companyName)
+
+  ;['序号', '设施名称', '检查项目', '主要检测内容', '检测方法'].forEach((header, idx) => {
+    setCell(sheet, 3, idx + 1, header, true, 10, 'center')
+  })
+  sheet.getRow(3).height = LAYOUT_CONFIG.list.rowH.header
+
+  let row = 4
+  project.subdivisions.forEach(sub => {
+    mergeAndSetCell(sheet, row, 1, row, colEnd, sub.l2TemplateName || '分部工程', true, 10, 'center')
+    sheet.getRow(row).height = LAYOUT_CONFIG.list.rowH.data
+    row++
+
+    sub.selectedL1Ids.forEach((l1Id, l1Idx) => {
+      const template = l1Templates.find(t => t.id === l1Id)
+      const data = sub.inspectionData[l1Id]
+      if (!template || !data) return
+      const items = buildEffectiveInspectionItems(template, data)
+      if (items.length === 0) return
+
+      const startRow = row
+      const groupMerges = computeGroupMerges(items)
+      items.forEach(item => {
+        setCell(sheet, row, 4, item.requirement || '/', false, 10, 'center')
+        setCell(sheet, row, 5, item.inspectionMethod || '/', false, 10, 'center')
+        sheet.getRow(row).height = LAYOUT_CONFIG.list.rowH.data
+        row++
+      })
+      const endRow = row - 1
+
+      setCell(sheet, startRow, 1, l1Idx + 1, false, 10, 'center')
+      setCell(sheet, startRow, 2, data.l1TemplateName || template.name, false, 10, 'center')
+      mergeCellsAndStyle(sheet, startRow, 1, endRow, 1)
+      mergeCellsAndStyle(sheet, startRow, 2, endRow, 2)
+
+      groupMerges.forEach(merge => {
+        const mergeStart = startRow + merge.start
+        const mergeEnd = mergeStart + merge.count - 1
+        setCell(sheet, mergeStart, 3, items[merge.start]?.groupName || '/', false, 10, 'center')
+        mergeCellsAndStyle(sheet, mergeStart, 3, mergeEnd, 3)
+      })
+    })
+  })
+
+  applyListSheetPageSetup(sheet, colEnd, Math.max(3, row - 1))
+}
+
 function buildResultListSheet(
   workbook: ExcelJS.Workbook,
   project: Project,
   l1Templates: L1Template[],
+  l2Templates: L2Template[],
   l3Template?: L3Template,
 ) {
   const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '结果清单'))
-  const colEnd = 5
+  const colEnd = 7
   LAYOUT_CONFIG.list.resultColWidths.forEach((w, idx) => { sheet.getColumn(idx + 1).width = w })
   buildListSheetTitle(sheet, '检查结果清单', colEnd, project.info.companyName)
 
-  ;['序号', '分部工程', '分项工程', '故障台数', '设备完好率'].forEach((header, idx) => {
-    setCell(sheet, 3, idx + 1, header, true, 10, 'center')
+  ;['序号', '分部工程', '分项工程', '设备总数', '故障台数', '设备完好率', '标度'].forEach((header, idx) => {
+    const cell = setCell(sheet, 3, idx + 1, header, true, 10, 'center')
+    if (idx === 3 || idx === 6) applyYellowFill(cell)
   })
   sheet.getRow(3).height = LAYOUT_CONFIG.list.rowH.header
 
@@ -729,12 +845,17 @@ function buildResultListSheet(
   })
   preview.subdivisions.forEach(sub => {
     const startRow = row
+    const l2Template = l2Templates.find(t => t.id === sub.l2TemplateId)
     sub.l1Rows.forEach((item, idx) => {
       setCell(sheet, row, 1, idx + 1, false, 10, 'center')
       setCell(sheet, row, 2, sub.name, false, 10, 'center')
       setCell(sheet, row, 3, item.name, false, 10, 'center')
-      setCell(sheet, row, 4, item.faultCount, false, 10, 'center')
-      setCell(sheet, row, 5, item.passRate, false, 10, 'center')
+      const totalCell = setCell(sheet, row, 4, item.totalCount, false, 10, 'center')
+      applyYellowFill(totalCell)
+      setCell(sheet, row, 5, item.faultCount, false, 10, 'center')
+      setCell(sheet, row, 6, item.passRate, false, 10, 'center')
+      const gradeCell = setCell(sheet, row, 7, calcGradeByThresholds(item.passRateValue, l2Template?.scoring.gradeThresholds), false, 10, 'center')
+      applyYellowFill(gradeCell)
       sheet.getRow(row).height = LAYOUT_CONFIG.list.rowH.data
       row++
     })
@@ -751,11 +872,11 @@ function buildDeviceListSheet(
   deviceItems: DeviceItem[],
 ) {
   const sheet = workbook.addWorksheet(uniqueSheetName(workbook, '设备清单'))
-  const colEnd = 6
+  const colEnd = 7
   LAYOUT_CONFIG.list.deviceColWidths.forEach((w, idx) => { sheet.getColumn(idx + 1).width = w })
   buildListSheetTitle(sheet, '设备清单', colEnd, project.info.companyName)
 
-  ;['序号', '设备名称', '设备型号', '单位', '数量', '设备用途'].forEach((header, idx) => {
+  ;['序号', '设备名称', '设备型号', '单位', '设备编号', '数量', '设备用途'].forEach((header, idx) => {
     setCell(sheet, 3, idx + 1, header, true, 10, 'center')
   })
   sheet.getRow(3).height = LAYOUT_CONFIG.list.rowH.header
@@ -766,8 +887,9 @@ function buildDeviceListSheet(
     setCell(sheet, row, 2, rowItem.device.name, false, 11, 'center')
     setCell(sheet, row, 3, rowItem.device.model || '/', false, 11, 'center')
     setCell(sheet, row, 4, rowItem.device.unit || '/', false, 11, 'center')
-    setCell(sheet, row, 5, 1, false, 11, 'center')
-    setCell(sheet, row, 6, rowItem.device.purpose || '/', false, 11, 'center')
+    setCell(sheet, row, 5, rowItem.device.serialNumber || '/', false, 11, 'center')
+    setCell(sheet, row, 6, 1, false, 11, 'center')
+    setCell(sheet, row, 7, rowItem.device.purpose || '/', false, 11, 'center')
     sheet.getRow(row).height = LAYOUT_CONFIG.list.rowH.data
     row++
   })
@@ -897,6 +1019,10 @@ function fillRange(
       sheet.getCell(row, col).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } }
     }
   }
+}
+
+function applyYellowFill(cell: ExcelJS.Cell) {
+  cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LAYOUT_CONFIG.colors.yellow } }
 }
 
 function buildListSheetTitle(
@@ -1047,12 +1173,22 @@ function calcRowPassRate(
   item: L1Template['inspectionItems'][number],
   row: (string | number | null)[] | undefined,
   cpIndices: number[],
+  data?: InspectionTableData,
+  rowIdx?: number,
 ): string {
   if (!row) return '/'
   let total = 0, passed = 0
   for (const idx of cpIndices) {
     const val = row[idx]
-    if (isEffectiveValue(val)) { total++; if (isPassed(item, val)) passed++ }
+    if (isEffectiveValue(val)) {
+      total++
+      if (item.validationType === 'manual') {
+        const judgement = data?.manualJudgements?.[`${rowIdx}-${idx}`] ?? 'pass'
+        if (judgement !== 'fail') passed++
+      } else if (isPassed(item, val)) {
+        passed++
+      }
+    }
   }
   if (total === 0) return '/'
   return ((passed / total) * 100).toFixed(1) + '%'
