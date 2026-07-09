@@ -19,6 +19,7 @@
  */
 
 import ExcelJS from 'exceljs'
+import JSZip from 'jszip'
 import { EXCEL_LAYOUT_CONFIG as LAYOUT_CONFIG } from '@/config/excelLayout'
 import type { Project, ProjectLocationItem, ProjectSubdivision, InspectionTableData } from '@/types/project'
 import type { DeviceItem } from '@/types/device'
@@ -36,6 +37,8 @@ import {
   buildL1ExportPrintPages,
   buildL1WorksheetLayout,
   estimateWrappedRowHeight,
+  getL1LocationSlotCount,
+  getUsablePageHeightPt,
   L1_PRINT_LAYOUT,
   L1_WORKSHEET_PAGE_SETUP,
   pxToPoints,
@@ -77,7 +80,7 @@ export async function exportProjectToExcel(
   if (!filePath) return false
 
   const workbook = buildProjectWorkbook(project, l1Templates, l2Templates, deviceItems, l3Templates)
-  const buffer = await workbook.xlsx.writeBuffer()
+  const buffer = await writeWorkbookBuffer(workbook)
   const uint8 = new Uint8Array(buffer as ArrayBuffer)
   await invoke('write_binary_file', {
     path: filePath,
@@ -85,6 +88,11 @@ export async function exportProjectToExcel(
   })
 
   return true
+}
+
+export async function writeWorkbookBuffer(workbook: ExcelJS.Workbook): Promise<ArrayBuffer> {
+  const rawBuffer = await workbook.xlsx.writeBuffer()
+  return applyWorkbookColumnPageBreaks(rawBuffer as ArrayBuffer, workbook)
 }
 
 export function buildProjectWorkbook(
@@ -163,7 +171,8 @@ function sanitizeWorkbookPageSetup(workbook: ExcelJS.Workbook) {
  * - 先按真实打印区高度做逻辑分页
  * - 再把各逻辑页作为横向页块渲染到同一张 Sheet
  * - 同位次表格共享同一组行号与备注行高，缺失位次用占位表补齐
- * - 最后一页非最终块使用原汇总/占位列作为第 7 个点位槽，最终块保留 6 点位 + 汇总列
+ * - 每个点位块最多 6 个地点，最终块保留汇总列；页尾放不下备注时另起备注页
+ * - 独立备注页写入正文下方独立打印区域，避免继承正文行分页被拆成多页
  */
 function buildL1Sheet(
   workbook: ExcelJS.Workbook,
@@ -183,25 +192,26 @@ function buildL1Sheet(
 
   if (pages.length === 0) return
 
-  const worksheetLayout = buildL1WorksheetLayout(effectiveTemplate, data, pages)
+  const bodyPages = pages.filter(page => page.segments.some(seg => !seg.isNotesOnly))
+  const notesOnlyPages = pages.filter(page => page.segments.every(seg => seg.isNotesOnly))
+  const worksheetLayout = buildL1WorksheetLayout(effectiveTemplate, data, bodyPages)
+  ;(sheet as ExcelJS.Worksheet & { __esiColumnPageBreaks?: number[] }).__esiColumnPageBreaks =
+    worksheetLayout.pageStartCols.slice(1).map(col => col - 1)
 
   worksheetLayout.slotGapRows.forEach(row => {
     sheet.getRow(row).height = L1_PRINT_LAYOUT.pageGapPt
   })
 
-  pages.forEach((page, pageIndex) => {
+  bodyPages.forEach((page, pageIndex) => {
     const startCol = worksheetLayout.pageStartCols[pageIndex]
-    const isLastPage = pageIndex === pages.length - 1
 
     for (let slotIndex = 0; slotIndex < worksheetLayout.maxSegmentsPerPage; slotIndex++) {
       const seg = page.segments[slotIndex]
       if (!seg) continue
 
       const hasSummarySlot = seg?.hasSummarySlot ?? false
-      const locationSlotCount = isLastPage && !hasSummarySlot
-        ? LAYOUT_CONFIG.l1.maxLocPerSeg + 1
-        : LAYOUT_CONFIG.l1.maxLocPerSeg
-      const notesMergeEndRow = seg.isLastEffectiveSeg
+      const locationSlotCount = getL1LocationSlotCount(hasSummarySlot)
+      const notesMergeEndRow = seg.isLastEffectiveSeg && seg.writeNotesInline
         ? worksheetLayout.totalRows
         : undefined
 
@@ -219,12 +229,50 @@ function buildL1Sheet(
         seg?.isLastEffectiveSeg ?? false,
         worksheetLayout.slotNotesRowHeights[slotIndex],
         notesMergeEndRow,
+        seg.writeNotesInline,
       )
     }
   })
 
   setL1ColWidths(sheet, worksheetLayout.pageBlockSpecs)
-  sheet.pageSetup.printArea = `A1:${columnNumberToName(Math.max(1, worksheetLayout.totalCols))}${Math.max(1, worksheetLayout.totalRows)}`
+
+  const printAreas = [
+    `A1:${columnNumberToName(Math.max(1, worksheetLayout.totalCols))}${Math.max(1, worksheetLayout.totalRows)}`,
+  ]
+
+  if (notesOnlyPages.length > 0) {
+    const notesStartCol = worksheetLayout.pageStartCols[worksheetLayout.pageStartCols.length - 1] ?? 1
+    const notesEndCol = notesStartCol + getL1NotesOnlyColCount() - 1
+    const notesPageRows = getL1SegmentRowCount(effectiveTemplate)
+    const notesRowHeight = getUsablePageHeightPt() / notesPageRows
+    let notesStartRow = worksheetLayout.totalRows + 2
+
+    notesOnlyPages.forEach(() => {
+      const notesEndRow = notesStartRow + notesPageRows - 1
+      writeL1NotesOnlyPage(
+        sheet,
+        data,
+        notesStartCol,
+        notesStartRow,
+        notesEndRow,
+        notesRowHeight,
+        true,
+      )
+      printAreas.push(`${columnNumberToName(notesStartCol)}${notesStartRow}:${columnNumberToName(notesEndCol)}${notesEndRow}`)
+      notesStartRow = notesEndRow + 2
+    })
+  }
+
+  sheet.pageSetup.printArea = printAreas[0]
+  ;(sheet as ExcelJS.Worksheet & { __esiPrintAreas?: string[] }).__esiPrintAreas = printAreas
+}
+
+function getL1NotesOnlyColCount(): number {
+  return 3 + getL1LocationSlotCount(true) + 1
+}
+
+function getL1SegmentRowCount(template: L1Template): number {
+  return 3 + template.inspectionItems.length + (template.faultRow?.enabled ? 1 : 0) + 2
 }
 
 function setL1ColWidths(
@@ -234,12 +282,13 @@ function setL1ColWidths(
   let currentCol = 1
 
   pageBlockSpecs.forEach(spec => {
+    const hasSummaryCol = spec.summaryColW > 0
     const blockWidths = [
       spec.seqColW,
       spec.itemColW,
       spec.reqColW,
-      ...Array.from({ length: LAYOUT_CONFIG.l1.maxLocPerSeg }, () => spec.locColW),
-      ...(spec.summaryColW > 0 ? [spec.summaryColW] : []),
+      ...Array.from({ length: getL1LocationSlotCount(hasSummaryCol) }, () => spec.locColW),
+      ...(hasSummaryCol ? [spec.summaryColW] : []),
     ]
 
     blockWidths.forEach((width, idx) => {
@@ -270,14 +319,16 @@ function writeL1SegmentBody(
   isLastEffectiveSeg = false,
   notesRowHeight: number = LAYOUT_CONFIG.l1.notesRowH,
   notesMergeEndRow?: number,
+  writeNotesInline = isLastEffectiveSeg,
 ): number {
   const cfg = LAYOUT_CONFIG.l1
   const sc = startCol
   const ic = startCol + 1
   const rc = startCol + 2
   const dc = startCol + 3
-  const summaryCol = dc + cfg.maxLocPerSeg
-  const normalizedLocationSlotCount = Math.max(0, locationSlotCount)
+  const maxLocationSlotCount = getL1LocationSlotCount(hasSummarySlot)
+  const summaryCol = dc + maxLocationSlotCount
+  const normalizedLocationSlotCount = Math.max(0, Math.min(locationSlotCount, maxLocationSlotCount))
 
   let r = startRow
 
@@ -425,7 +476,7 @@ function writeL1SegmentBody(
     r++
   }
 
-  if (isLastEffectiveSeg) {
+  if (isLastEffectiveSeg && writeNotesInline) {
     const notes = data.notes ?? ''
     const notesEndCol = hasSummarySlot ? summaryCol : segmentEndCol
     const notesStartRow = r
@@ -453,6 +504,171 @@ function writeL1SegmentBody(
   sheet.mergeCells(leftStartRow, sc, tailEndRow, ic)
 
   return r
+}
+
+async function applyWorkbookColumnPageBreaks(
+  rawBuffer: ArrayBuffer,
+  workbook: ExcelJS.Workbook,
+): Promise<ArrayBuffer> {
+  const worksheetSpecs = workbook.worksheets
+    .map((sheet, index) => {
+      const printAreas = ((sheet as ExcelJS.Worksheet & { __esiPrintAreas?: string[] }).__esiPrintAreas ?? [])
+        .filter(area => typeof area === 'string' && area.trim().length > 0)
+      return {
+        worksheetPath: `xl/worksheets/sheet${index + 1}.xml`,
+        localSheetId: index,
+        sheetName: sheet.name,
+        printAreas,
+        breakCols: ((sheet as ExcelJS.Worksheet & { __esiColumnPageBreaks?: number[] }).__esiColumnPageBreaks ?? [])
+          .filter(col => Number.isFinite(col) && col > 0),
+      }
+    })
+
+  const breakSpecs = worksheetSpecs.filter(spec => spec.breakCols.length > 0)
+  const printAreaSpecs = worksheetSpecs.filter(spec => spec.printAreas.length > 1)
+
+  if (breakSpecs.length === 0 && printAreaSpecs.length === 0) return rawBuffer
+
+  const zip = await JSZip.loadAsync(rawBuffer)
+  await Promise.all(breakSpecs.map(async spec => {
+    const file = zip.file(spec.worksheetPath)
+    if (!file) return
+    const xml = await file.async('string')
+    zip.file(spec.worksheetPath, injectColumnPageBreaks(xml, spec.breakCols))
+  }))
+
+  if (printAreaSpecs.length > 0) {
+    const workbookFile = zip.file('xl/workbook.xml')
+    if (workbookFile) {
+      const workbookXml = await workbookFile.async('string')
+      zip.file('xl/workbook.xml', injectWorkbookPrintAreas(workbookXml, printAreaSpecs))
+    }
+  }
+
+  const patched = await zip.generateAsync({ type: 'arraybuffer' })
+  return patched
+}
+
+function injectColumnPageBreaks(xml: string, breakCols: number[]): string {
+  const uniqueBreaks = [...new Set(breakCols)].sort((a, b) => a - b)
+  if (uniqueBreaks.length === 0) return xml
+
+  const colBreaksXml = [
+    `<colBreaks count="${uniqueBreaks.length}" manualBreakCount="${uniqueBreaks.length}">`,
+    ...uniqueBreaks.map(col => `<brk id="${col}" min="0" max="1048575" man="1"/>`),
+    '</colBreaks>',
+  ].join('')
+  const withoutExistingBreaks = xml.replace(/<colBreaks[\s\S]*?<\/colBreaks>/, '')
+
+  if (withoutExistingBreaks.includes('<rowBreaks')) {
+    return withoutExistingBreaks.replace(/(<\/rowBreaks>)/, `$1${colBreaksXml}`)
+  }
+  if (withoutExistingBreaks.includes('<drawing')) {
+    return withoutExistingBreaks.replace(/(<drawing\b)/, `${colBreaksXml}$1`)
+  }
+  if (withoutExistingBreaks.includes('<legacyDrawing')) {
+    return withoutExistingBreaks.replace(/(<legacyDrawing\b)/, `${colBreaksXml}$1`)
+  }
+  return withoutExistingBreaks.replace('</worksheet>', `${colBreaksXml}</worksheet>`)
+}
+
+function injectWorkbookPrintAreas(
+  xml: string,
+  specs: Array<{ localSheetId: number; sheetName: string; printAreas: string[] }>,
+): string {
+  const newDefinedNames = specs.map(spec => {
+    const areaFormula = spec.printAreas
+      .map(area => `${formatPrintSheetName(spec.sheetName)}!${formatAbsoluteRange(area)}`)
+      .join(',')
+    return `<definedName name="_xlnm.Print_Area" localSheetId="${spec.localSheetId}">${escapeXmlText(areaFormula)}</definedName>`
+  }).join('')
+
+  let nextXml = xml
+  specs.forEach(spec => {
+    const existingPrintArea = new RegExp(
+      `<definedName\\b(?=[^>]*\\bname="_xlnm\\.Print_Area")(?=[^>]*\\blocalSheetId="${spec.localSheetId}")[^>]*>[\\s\\S]*?<\\/definedName>`,
+      'g',
+    )
+    nextXml = nextXml.replace(existingPrintArea, '')
+  })
+
+  if (nextXml.includes('<definedNames>')) {
+    return nextXml.replace('</definedNames>', `${newDefinedNames}</definedNames>`)
+  }
+  return nextXml.replace('</workbook>', `<definedNames>${newDefinedNames}</definedNames></workbook>`)
+}
+
+function formatPrintSheetName(sheetName: string): string {
+  return `'${sheetName.replace(/'/g, "''")}'`
+}
+
+function formatAbsoluteRange(range: string): string {
+  return range
+    .split(':')
+    .map(part => {
+      const match = part.match(/^\$?([A-Z]+)\$?(\d+)$/i)
+      if (!match) return part
+      return `$${match[1].toUpperCase()}$${match[2]}`
+    })
+    .join(':')
+}
+
+function escapeXmlText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+}
+
+function writeL1NotesOnlyPage(
+  sheet: ExcelJS.Worksheet,
+  data: InspectionTableData,
+  startCol: number,
+  startRow: number,
+  endRow: number,
+  notesRowHeight: number,
+  fillAllRows = false,
+) {
+  const cfg = LAYOUT_CONFIG.l1
+  const fnt = LAYOUT_CONFIG.font
+  const bdr = LAYOUT_CONFIG.borders
+  const sc = startCol
+  const rc = startCol + 2
+  const dc = startCol + 3
+  const summaryCol = dc + getL1LocationSlotCount(true)
+  const notesEndRow = Math.max(startRow, endRow)
+  const notes = data.notes ?? ''
+
+  for (let row = startRow; row <= notesEndRow; row++) {
+    if (fillAllRows) {
+      sheet.getRow(row).height = notesRowHeight
+    }
+    for (let col = sc; col <= summaryCol; col++) {
+      const cell = sheet.getCell(row, col)
+      applyL1Cell(cell, false, fnt.dataSize, 'center')
+      cell.border = {
+        top: { style: bdr.all },
+        bottom: { style: bdr.all },
+        left: { style: bdr.all },
+        right: { style: bdr.all },
+      }
+    }
+  }
+
+  const labelCell = sheet.getCell(startRow, sc)
+  labelCell.value = '备注'
+  labelCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+  sheet.mergeCells(startRow, sc, notesEndRow, rc)
+
+  const contentCell = sheet.getCell(startRow, dc)
+  contentCell.value = notes
+  contentCell.alignment = { horizontal: 'left', vertical: 'top', wrapText: true }
+  sheet.mergeCells(startRow, dc, notesEndRow, summaryCol)
+  if (!fillAllRows) {
+    sheet.getRow(startRow).height = Math.max(notesRowHeight, cfg.notesRowH)
+  }
 }
 
 // ============================================================

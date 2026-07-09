@@ -1,9 +1,10 @@
 import type { InspectionTableData } from '@/types/project'
 import type { L1Template } from '@/types/template'
 import { L1_PRINT_LAYOUT } from '@/config/excelLayout'
-import { computeSegments } from '@/utils/segmentLayout'
 
 export { L1_PRINT_LAYOUT } from '@/config/excelLayout'
+
+const FINAL_NOTES_INLINE_LINE_LIMIT = 3
 
 export const L1_WORKSHEET_PAGE_SETUP = {
   paperSize: L1_PRINT_LAYOUT.paperSize,
@@ -28,11 +29,13 @@ export interface L1PrintSegmentLayout {
   endCol: number
   cpIndices: number[]
   hasSummarySlot: boolean
+  isNotesOnly: boolean
   pageIndex: number
   notesRowHeight: number
   baseNotesRowHeight: number
   totalHeight: number
   isLastEffectiveSeg: boolean
+  writeNotesInline: boolean
 }
 
 export interface L1PrintPageLayout {
@@ -55,6 +58,7 @@ export interface L1PageBlockSpec {
 export interface L1WorksheetLayout {
   maxSegmentsPerPage: number
   slotStartRows: number[]
+  slotEndRows: number[]
   slotGapRows: number[]
   slotNotesRowHeights: number[]
   pageStartCols: number[]
@@ -69,9 +73,12 @@ interface SegmentMetric {
   endCol: number
   cpIndices: number[]
   hasSummarySlot: boolean
+  isNotesOnly: boolean
   baseHeight: number
   baseNotesRowHeight: number
   isLastEffectiveSeg: boolean
+  writeNotesInline: boolean
+  forceSeparateNotes: boolean
 }
 
 export function buildL1PrintPages(
@@ -91,18 +98,20 @@ export function buildL1ExportPrintPages(
 function buildL1PrintPagesCore(
   template: L1Template,
   data: InspectionTableData,
-  useLastPageSevenSlots: boolean,
+  splitOverflowNotes: boolean,
 ): L1PrintPageLayout[] {
   const totalCols = data.checkpoints.length
   if (totalCols <= 0) return []
 
-  const breaks: number[] = []
-  for (let i = L1_PRINT_LAYOUT.maxLocPerSeg; i < totalCols; i += L1_PRINT_LAYOUT.maxLocPerSeg) {
-    breaks.push(i)
-  }
+  const segments = splitOverflowNotes
+    ? buildExportSegments(totalCols)
+    : buildPreviewSegments(totalCols)
+  const breaks = segments
+    .slice(1)
+    .map(seg => seg.startCol)
+    .filter(startCol => startCol < totalCols)
   data.segmentBreaks = breaks
 
-  const segments = computeSegments(breaks, totalCols)
   if (segments.length === 0) return []
 
   const lastSegIndex = segments[segments.length - 1]?.index ?? -1
@@ -110,12 +119,22 @@ function buildL1PrintPagesCore(
 
   const metrics: SegmentMetric[] = segments.map(seg => {
     const isLastEffectiveSeg = seg.index === lastSegIndex
+    const isSummaryOnlySeg = seg.startCol > seg.endCol
     const notesText = isLastEffectiveSeg ? (data.notes ?? '') : '/'
+    const notesWidth = getL1NotesContentWidth(isLastEffectiveSeg)
+    const notesLineCount = estimateWrappedLineCount(
+      notesText,
+      notesWidth,
+      L1_PRINT_LAYOUT.dataFontSize,
+    )
+    const minNotesHeight = isLastEffectiveSeg
+      ? L1_PRINT_LAYOUT.notesRowH * FINAL_NOTES_INLINE_LINE_LIMIT
+      : L1_PRINT_LAYOUT.notesRowH
     const baseNotesRowHeight = estimateWrappedRowHeight(
       notesText,
-      getL1NotesContentWidth(isLastEffectiveSeg),
+      notesWidth,
       L1_PRINT_LAYOUT.dataFontSize,
-      L1_PRINT_LAYOUT.notesRowH,
+      minNotesHeight,
     )
 
     return {
@@ -124,9 +143,15 @@ function buildL1PrintPagesCore(
       endCol: seg.endCol,
       cpIndices: range(seg.startCol, seg.endCol),
       hasSummarySlot: isLastEffectiveSeg,
+      isNotesOnly: false,
       baseHeight: staticHeight + baseNotesRowHeight,
       baseNotesRowHeight,
       isLastEffectiveSeg,
+      writeNotesInline: isLastEffectiveSeg,
+      forceSeparateNotes: splitOverflowNotes &&
+        isLastEffectiveSeg &&
+        !isSummaryOnlySeg &&
+        notesLineCount > FINAL_NOTES_INLINE_LINE_LIMIT,
     }
   })
 
@@ -136,6 +161,53 @@ function buildL1PrintPagesCore(
   let currentHeight = 0
 
   for (const metric of metrics) {
+    if (splitOverflowNotes && metric.isLastEffectiveSeg) {
+      const finalBodyMetric: SegmentMetric = {
+        ...metric,
+        baseHeight: staticHeight,
+        baseNotesRowHeight: L1_PRINT_LAYOUT.notesRowH,
+        writeNotesInline: false,
+        forceSeparateNotes: metric.forceSeparateNotes,
+      }
+      const gap = currentPage.length > 0 ? L1_PRINT_LAYOUT.pageGapPt : 0
+      const projectedBodyHeight = currentHeight + gap + finalBodyMetric.baseHeight
+
+      if (currentPage.length > 0 && projectedBodyHeight > availableHeight) {
+        pages.push(currentPage)
+        currentPage = [finalBodyMetric]
+        currentHeight = finalBodyMetric.baseHeight
+      } else {
+        currentPage.push(finalBodyMetric)
+        currentHeight = projectedBodyHeight
+      }
+
+      const finalNotesHeight = metric.baseNotesRowHeight
+      if (!metric.forceSeparateNotes && availableHeight - currentHeight >= finalNotesHeight) {
+        finalBodyMetric.baseHeight += finalNotesHeight
+        finalBodyMetric.baseNotesRowHeight = finalNotesHeight
+        finalBodyMetric.writeNotesInline = true
+        currentHeight += finalNotesHeight
+      } else {
+        pages.push(currentPage)
+        currentPage = []
+        currentHeight = 0
+        pages.push([{
+          index: metric.index + 1,
+          startCol: metric.endCol + 1,
+          endCol: metric.endCol,
+          cpIndices: [],
+          hasSummarySlot: true,
+          isNotesOnly: true,
+          baseHeight: finalNotesHeight,
+          baseNotesRowHeight: finalNotesHeight,
+          isLastEffectiveSeg: false,
+          writeNotesInline: true,
+          forceSeparateNotes: false,
+        }])
+      }
+      continue
+    }
+
     const gap = currentPage.length > 0 ? L1_PRINT_LAYOUT.pageGapPt : 0
     const projectedHeight = currentHeight + gap + metric.baseHeight
 
@@ -152,10 +224,6 @@ function buildL1PrintPagesCore(
 
   if (currentPage.length > 0) {
     pages.push(currentPage)
-  }
-
-  if (useLastPageSevenSlots) {
-    applyLastPageSevenSlotMetrics(pages, totalCols, staticHeight, data)
   }
 
   return pages.map((pageMetrics, pageIndex) => {
@@ -177,11 +245,13 @@ function buildL1PrintPagesCore(
         endCol: metric.endCol,
         cpIndices: metric.cpIndices,
         hasSummarySlot: metric.hasSummarySlot,
+        isNotesOnly: metric.isNotesOnly,
         pageIndex,
         notesRowHeight: metric.baseNotesRowHeight + extra,
         baseNotesRowHeight: metric.baseNotesRowHeight,
         totalHeight: metric.baseHeight + extra,
         isLastEffectiveSeg: metric.isLastEffectiveSeg,
+        writeNotesInline: metric.writeNotesInline,
       }
     })
 
@@ -195,52 +265,6 @@ function buildL1PrintPagesCore(
   })
 }
 
-function applyLastPageSevenSlotMetrics(
-  pages: SegmentMetric[][],
-  totalCols: number,
-  staticHeight: number,
-  data: InspectionTableData,
-) {
-  const lastPage = pages[pages.length - 1]
-  if (!lastPage || lastPage.length === 0) return
-
-  const firstCol = lastPage[0].startCol
-  const remainingIndices = range(firstCol, totalCols - 1)
-  const usedSlotCount = Math.min(
-    lastPage.length,
-    Math.max(
-      1,
-      Math.ceil(remainingIndices.length / (L1_PRINT_LAYOUT.maxLocPerSeg + 1)),
-    ),
-  )
-  lastPage.splice(usedSlotCount)
-
-  let offset = 0
-
-  lastPage.forEach((metric, slotIndex) => {
-    const isFinalSlot = slotIndex === lastPage.length - 1
-    const capacity = L1_PRINT_LAYOUT.maxLocPerSeg + 1
-    const cpIndices = remainingIndices.slice(offset, offset + capacity)
-    offset += cpIndices.length
-
-    metric.cpIndices = cpIndices
-    metric.startCol = cpIndices[0] ?? totalCols
-    metric.endCol = cpIndices[cpIndices.length - 1] ?? (totalCols - 1)
-    metric.isLastEffectiveSeg = isFinalSlot
-    metric.hasSummarySlot = isFinalSlot && cpIndices.length <= L1_PRINT_LAYOUT.maxLocPerSeg
-
-    const notesText = isFinalSlot ? (data.notes ?? '') : '/'
-    const baseNotesRowHeight = estimateWrappedRowHeight(
-      notesText,
-      getL1NotesContentWidth(metric.hasSummarySlot),
-      L1_PRINT_LAYOUT.dataFontSize,
-      L1_PRINT_LAYOUT.notesRowH,
-    )
-    metric.baseNotesRowHeight = baseNotesRowHeight
-    metric.baseHeight = staticHeight + baseNotesRowHeight
-  })
-}
-
 export function buildL1WorksheetLayout(
   template: L1Template,
   data: InspectionTableData,
@@ -250,6 +274,7 @@ export function buildL1WorksheetLayout(
     return {
       maxSegmentsPerPage: 0,
       slotStartRows: [],
+      slotEndRows: [],
       slotGapRows: [],
       slotNotesRowHeights: [],
       pageStartCols: [],
@@ -323,6 +348,7 @@ export function buildL1WorksheetLayout(
   }
 
   const slotStartRows: number[] = []
+  const slotEndRows: number[] = []
   const slotGapRows: number[] = []
   let row = 1
   const segmentRowCount = getL1SegmentRowCount(template)
@@ -330,6 +356,7 @@ export function buildL1WorksheetLayout(
   for (let slotIndex = 0; slotIndex < maxSegmentsPerPage; slotIndex++) {
     slotStartRows.push(row)
     row += segmentRowCount
+    slotEndRows.push(row - 1)
 
     if (slotIndex < maxSegmentsPerPage - 1) {
       slotGapRows.push(row)
@@ -337,8 +364,8 @@ export function buildL1WorksheetLayout(
     }
   }
 
-  const pageBlockSpecs = pages.map((_, pageIndex) =>
-    getL1PageBlockSpec(pageIndex === pages.length - 1),
+  const pageBlockSpecs = pages.map(page =>
+    getL1PageBlockSpec(page.segments.some(seg => seg.hasSummarySlot || seg.isNotesOnly)),
   )
 
   const pageStartCols: number[] = []
@@ -351,6 +378,7 @@ export function buildL1WorksheetLayout(
   return {
     maxSegmentsPerPage,
     slotStartRows,
+    slotEndRows,
     slotGapRows,
     slotNotesRowHeights,
     pageStartCols,
@@ -370,20 +398,30 @@ export function estimateWrappedRowHeight(
   const normalizedMinHeight = Math.ceil(minHeight)
   if (!text) return normalizedMinHeight
 
-  const usableWidthPx = Math.max(
-    1,
-    excelWidthToPixels(width) - L1_PRINT_LAYOUT.textCellPaddingPx,
-  )
-
-  const lineCount = text
-    .split('\n')
-    .reduce((sum, line) => sum + Math.max(1, Math.ceil(getTextDisplayPixels(line, fontSize) / usableWidthPx)), 0)
-
+  const lineCount = estimateWrappedLineCount(text, width, fontSize)
   const lineHeight = Math.max(Math.ceil(fontSize * 1.7), 14)
   return Math.max(
     normalizedMinHeight,
     Math.ceil((lineCount * lineHeight) + L1_PRINT_LAYOUT.rowHeightPaddingPt),
   )
+}
+
+export function estimateWrappedLineCount(
+  value: string | number | null | undefined,
+  width: number,
+  fontSize: number,
+): number {
+  const text = `${value ?? ''}`.replace(/\r\n/g, '\n').trim()
+  if (!text) return 1
+
+  const usableWidthPx = Math.max(
+    1,
+    excelWidthToPixels(width) - L1_PRINT_LAYOUT.textCellPaddingPx,
+  )
+
+  return text
+    .split('\n')
+    .reduce((sum, line) => sum + Math.max(1, Math.ceil(getTextDisplayPixels(line, fontSize) / usableWidthPx)), 0)
 }
 
 export function cmToPt(value: number): number {
@@ -420,10 +458,11 @@ export function getL1PageBlockSpec(hasSummaryCol: boolean): L1PageBlockSpec {
     ? L1_PRINT_LAYOUT.locColWWithSum
     : L1_PRINT_LAYOUT.locColWNoSum
   const summaryColW = hasSummaryCol ? L1_PRINT_LAYOUT.summaryColW : 0
-  const colCount = 3 + L1_PRINT_LAYOUT.maxLocPerSeg + (hasSummaryCol ? 1 : 0)
+  const locationSlotCount = getL1LocationSlotCount(hasSummaryCol)
+  const colCount = 3 + locationSlotCount + (hasSummaryCol ? 1 : 0)
   const printableWidthPx = ptToPx(getPrintableWidthPt())
   const fixedWidthPx =
-    (L1_PRINT_LAYOUT.maxLocPerSeg * excelWidthToPixels(locColW)) +
+    (locationSlotCount * excelWidthToPixels(locColW)) +
     (hasSummaryCol ? excelWidthToPixels(summaryColW) : 0)
   const remainingWidthPx = Math.max(0, printableWidthPx - fixedWidthPx)
   const seqRatio = L1_PRINT_LAYOUT.fixedColumnRatio.seq
@@ -448,10 +487,52 @@ export function getL1PrintColCount(hasSummaryCol = true): number {
   return getL1PageBlockSpec(hasSummaryCol).colCount
 }
 
+export function getL1LocationSlotCount(hasSummaryCol: boolean): number {
+  return hasSummaryCol
+    ? Math.max(1, L1_PRINT_LAYOUT.maxLocPerSeg - 1)
+    : L1_PRINT_LAYOUT.maxLocPerSeg
+}
+
 export function getL1NotesContentWidth(hasSummaryCol: boolean): number {
   const pageSpec = getL1PageBlockSpec(hasSummaryCol)
-  const locWidth = L1_PRINT_LAYOUT.maxLocPerSeg * pageSpec.locColW
+  const locWidth = getL1LocationSlotCount(hasSummaryCol) * pageSpec.locColW
   return hasSummaryCol ? locWidth + pageSpec.summaryColW : locWidth
+}
+
+function buildPreviewSegments(totalCols: number): Array<{ index: number; startCol: number; endCol: number }> {
+  const segments: Array<{ index: number; startCol: number; endCol: number }> = []
+  for (let startCol = 0; startCol < totalCols; startCol += L1_PRINT_LAYOUT.maxLocPerSeg) {
+    segments.push({
+      index: segments.length,
+      startCol,
+      endCol: Math.min(totalCols - 1, startCol + L1_PRINT_LAYOUT.maxLocPerSeg - 1),
+    })
+  }
+  return segments
+}
+
+function buildExportSegments(totalCols: number): Array<{ index: number; startCol: number; endCol: number }> {
+  const finalLocationSlotCount = getL1LocationSlotCount(true)
+  if (totalCols <= finalLocationSlotCount) {
+    return [{ index: 0, startCol: 0, endCol: totalCols - 1 }]
+  }
+
+  const segments: Array<{ index: number; startCol: number; endCol: number }> = []
+  let startCol = 0
+
+  while (totalCols - startCol > finalLocationSlotCount) {
+    const endCol = Math.min(totalCols - 1, startCol + L1_PRINT_LAYOUT.maxLocPerSeg - 1)
+    segments.push({ index: segments.length, startCol, endCol })
+    startCol = endCol + 1
+  }
+
+  segments.push({
+    index: segments.length,
+    startCol,
+    endCol: totalCols - 1,
+  })
+
+  return segments
 }
 
 function getL1StaticSegmentHeight(
