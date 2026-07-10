@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Generated verification/debug artifacts
+vbird-esi/outputs/
+docs/superpowers/
+vbird-esi/scripts/
+~$*.xlsx
+**/~$*.xlsx
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
