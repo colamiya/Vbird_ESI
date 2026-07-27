@@ -8,6 +8,7 @@ import type {
 import type { L1Template, L2Template, L3SubdivisionWeight, L3Template } from '@/types/template'
 import { generateId } from '@/utils/id'
 import { ensureRequirementOverrides } from '@/utils/projectRequirement'
+import { getOrderedL1Ids } from '@/utils/projectOrder'
 
 export const PROJECT_DATA_VERSION = 3
 export const DEFAULT_SUBDIVISION_WEIGHT = 1
@@ -42,6 +43,8 @@ export function createInspectionData(
     notes: '',
     segmentBreaks: [],
     rowBreaks: [],
+    resultGroupName: template.resultGroupName?.trim() || undefined,
+    resultWeight: normalizeSubdivisionWeight(template.resultWeight),
   }
   ensureRequirementOverrides(data, template.inspectionItems)
   return data
@@ -85,6 +88,7 @@ export function ensureProjectLocationItems(project: Project): Project {
       if (!data.requirementOverrides) data.requirementOverrides = {}
       if (!data.manualJudgements) data.manualJudgements = {}
       data.resultWeight = normalizeSubdivisionWeight(data.resultWeight)
+      data.resultGroupName = data.resultGroupName?.trim() || undefined
     }
   }
   if (!project.locationItems) {
@@ -170,6 +174,7 @@ export function syncLocationItemToProject(
   item: ProjectLocationItem,
   l1Template: L1Template,
   summaryWeight = DEFAULT_SUBDIVISION_WEIGHT,
+  l2Template?: Pick<L2Template, 'availableL1Ids'>,
 ): void {
   const sub = findOrCreateSubdivision(project, {
     id: item.l2TemplateId,
@@ -178,6 +183,7 @@ export function syncLocationItemToProject(
   if (!sub.selectedL1Ids.includes(item.l1TemplateId)) {
     sub.selectedL1Ids.push(item.l1TemplateId)
   }
+  sub.selectedL1Ids = getOrderedL1Ids(sub, l2Template)
   const names = normalizeCheckpointNames(item.checkpointNames, item.quantity)
   item.checkpointNames = names
   item.quantity = names.length
@@ -191,10 +197,35 @@ export function syncLocationItemToProject(
     applyCheckpointNamesToInspectionData(existing, names)
   } else {
     const data = createInspectionData(l1Template, names, item.id)
-    data.resultGroupName = item.resultGroupName?.trim() || undefined
-    data.resultWeight = normalizeSubdivisionWeight(item.resultWeight)
+    data.resultGroupName = item.resultGroupName?.trim() || data.resultGroupName
+    data.resultWeight = item.resultWeight === undefined
+      ? data.resultWeight
+      : normalizeSubdivisionWeight(item.resultWeight)
     sub.inspectionData[item.l1TemplateId] = data
   }
+}
+
+/** 将 L1 录入页直接修改的检查点列回写到项目级点位清单。 */
+export function syncInspectionDataToLocationItem(
+  project: Project,
+  subdivision: Pick<ProjectSubdivision, 'l2TemplateId'>,
+  data: InspectionTableData,
+): ProjectLocationItem | undefined {
+  const item = (project.locationItems ?? []).find(row =>
+    row.id === data.locationItemId || (
+      row.l2TemplateId === subdivision.l2TemplateId &&
+      row.l1TemplateId === data.l1TemplateId
+    ),
+  )
+  if (!item) return undefined
+
+  data.locationItemId = item.id
+  item.l1TemplateName = data.l1TemplateName
+  item.checkpointNames = data.checkpoints.map(checkpoint => checkpoint.name)
+  item.quantity = item.checkpointNames.length
+  item.resultGroupName = data.resultGroupName?.trim() || undefined
+  item.resultWeight = normalizeSubdivisionWeight(data.resultWeight)
+  return item
 }
 
 export function removeLocationItemFromProject(project: Project, item: ProjectLocationItem): void {

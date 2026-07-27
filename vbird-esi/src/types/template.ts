@@ -63,6 +63,10 @@ export interface L1Template {
   facilityName: string         // 设施名称（显示在表头）
   /** 重点设备标记；界面/导出显示为名称后缀 "*"，计算按字段判断 */
   isCritical?: boolean
+  /** 同一 L2 内同名 L1 按权值合并展示；留空则保持独立 */
+  resultGroupName?: string
+  /** 结果组合加权计算权值，缺失时按 1 处理，0 表示不参与 */
+  resultWeight?: number
   createdAt: string
   updatedAt: string
 

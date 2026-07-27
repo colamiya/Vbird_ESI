@@ -5,7 +5,7 @@
  */
 import { ref, computed, onMounted } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { Plus, Delete, Edit, Search, View } from '@element-plus/icons-vue'
+import { Plus, Delete, Edit, Search, View, Download, Upload } from '@element-plus/icons-vue'
 import { useTemplateStore } from '@/stores/templateStore'
 import type { L1Template, L2Template, L3Template, InspectionTableData, DeviceItem } from '@/types'
 import { generateId } from '@/utils/id'
@@ -13,6 +13,7 @@ import InspectionTable from '@/components/InspectionTable.vue'
 import L1TemplateDialog from './L1TemplateDialog.vue'
 import L2TemplateDialog from './L2TemplateDialog.vue'
 import L3TemplateDialog from './L3TemplateDialog.vue'
+import { exportObjectPackage, importObjectPackage, type ObjectPackageRootType } from '@/utils/objectPackage'
 
 const store = useTemplateStore()
 
@@ -218,6 +219,36 @@ function getL2Names(ids: string[]): string[] {
   return ids.map(id => store.l2Templates.find(t => t.id === id)?.name ?? '(已删除)')
 }
 
+function buildObjectPackageCatalog() {
+  return {
+    l1Templates: store.l1Templates,
+    l2Templates: store.l2Templates,
+    l3Templates: store.l3Templates,
+    deviceItems: store.deviceItems,
+    projects: [],
+  }
+}
+
+async function handleExportObject(rootType: Exclude<ObjectPackageRootType, 'project'>, id: string) {
+  try {
+    const path = await exportObjectPackage(rootType, id, buildObjectPackageCatalog())
+    if (path) ElMessage.success('对象包已导出')
+  } catch (error: any) {
+    ElMessage.error(`对象包导出失败: ${error.message || error}`)
+  }
+}
+
+async function handleImportObject(rootType: Exclude<ObjectPackageRootType, 'project'>) {
+  try {
+    const result = await importObjectPackage(rootType, buildObjectPackageCatalog())
+    if (!result) return
+    await store.loadAll()
+    ElMessage.success(`已导入${result.importedCount} 个对象`)
+  } catch (error: any) {
+    ElMessage.error(`对象包导入失败: ${error.message || error}`)
+  }
+}
+
 onMounted(() => { store.loadAll() })
 </script>
 
@@ -279,7 +310,7 @@ onMounted(() => { store.loadAll() })
     <div v-if="activeTab === 'l1'" class="template-list-section">
       <div class="list-toolbar">
         <h3 class="list-title">L1 点检表模板</h3>
-        <el-button type="primary" :icon="Plus" size="small" @click="openCreateL1">新建模板</el-button>
+        <div class="toolbar-actions"><el-button :icon="Upload" size="small" @click="handleImportObject('l1')">导入 L1</el-button><el-button type="primary" :icon="Plus" size="small" @click="openCreateL1">新建模板</el-button></div>
       </div>
       <!-- 骨架屏 -->
       <div v-if="store.loading" class="skeleton-grid">
@@ -301,6 +332,7 @@ onMounted(() => { store.loadAll() })
             <h4 class="card-title">{{ tpl.name }}</h4>
             <div class="card-actions" @click.stop>
               <el-button :icon="View" size="small" text @click="openPreview(tpl)" title="预览" />
+              <el-button :icon="Download" size="small" text @click="handleExportObject('l1', tpl.id)" title="导出对象包" />
               <el-button :icon="Edit" size="small" text @click="openEditL1(tpl)" title="编辑" />
               <el-button :icon="Delete" size="small" text type="danger" @click="handleDeleteL1(tpl)" title="删除" />
             </div>
@@ -319,7 +351,7 @@ onMounted(() => { store.loadAll() })
     <div v-else-if="activeTab === 'l2'" class="template-list-section">
       <div class="list-toolbar">
         <h3 class="list-title">L2 分部表模板</h3>
-        <el-button type="primary" :icon="Plus" size="small" @click="openCreateL2">新建模板</el-button>
+        <div class="toolbar-actions"><el-button :icon="Upload" size="small" @click="handleImportObject('l2')">导入 L2</el-button><el-button type="primary" :icon="Plus" size="small" @click="openCreateL2">新建模板</el-button></div>
       </div>
       <div v-if="store.loading" class="skeleton-grid">
         <div v-for="i in 3" :key="i" class="skeleton-card"><div class="sk-line w60"></div><div class="sk-line w40"></div><div class="sk-line w80"></div></div>
@@ -336,6 +368,7 @@ onMounted(() => { store.loadAll() })
           <div class="card-header">
             <h4 class="card-title">{{ tpl.name }}</h4>
             <div class="card-actions">
+              <el-button :icon="Download" size="small" text @click="handleExportObject('l2', tpl.id)" title="导出对象包" />
               <el-button :icon="Edit" size="small" text @click="openEditL2(tpl)" />
               <el-button :icon="Delete" size="small" text type="danger" @click="handleDeleteL2(tpl)" />
             </div>
@@ -353,7 +386,7 @@ onMounted(() => { store.loadAll() })
     <div v-else-if="activeTab === 'l3'" class="template-list-section">
       <div class="list-toolbar">
         <h3 class="list-title">L3 总表模板</h3>
-        <el-button type="primary" :icon="Plus" size="small" @click="openCreateL3">新建模板</el-button>
+        <div class="toolbar-actions"><el-button :icon="Upload" size="small" @click="handleImportObject('l3')">导入 L3</el-button><el-button type="primary" :icon="Plus" size="small" @click="openCreateL3">新建模板</el-button></div>
       </div>
       <div v-if="store.loading" class="skeleton-grid">
         <div v-for="i in 3" :key="i" class="skeleton-card"><div class="sk-line w60"></div><div class="sk-line w40"></div><div class="sk-line w80"></div></div>
@@ -370,6 +403,7 @@ onMounted(() => { store.loadAll() })
           <div class="card-header">
             <h4 class="card-title">{{ tpl.name }}</h4>
             <div class="card-actions">
+              <el-button :icon="Download" size="small" text @click="handleExportObject('l3', tpl.id)" title="导出对象包" />
               <el-button :icon="Edit" size="small" text @click="openEditL3(tpl)" />
               <el-button :icon="Delete" size="small" text type="danger" @click="handleDeleteL3(tpl)" />
             </div>
@@ -505,6 +539,7 @@ onMounted(() => { store.loadAll() })
 
 .template-list-section { min-height: 300px; }
 .list-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-md); }
+.toolbar-actions { display: flex; align-items: center; gap: var(--space-sm); }
 .list-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 
 .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-sm); }

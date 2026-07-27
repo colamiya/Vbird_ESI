@@ -4,7 +4,7 @@
 >
 > 本项目采用“双层启动协议”：`BOOT.md` 负责跨项目通用启动流程，`AGENTS.md` 负责本项目特化约束。
 >
-> 最后更新: 2026-07-08
+> 最后更新: 2026-07-12
 
 > 2026-04-26 补充：`other/20260425-New` 新需求已进入实现。项目新增“项目级点位清单 / 结果清单 / 设备清单 / 检查设备库 / 重点设备 / 设备完好率 / 全量系统数据导入导出”链路。后续判断现状时以代码和 `ONGOING.md` 的 2026-04-26 补充为准。
 >
@@ -21,8 +21,30 @@
 > 2026-07-07 追加：L1 Excel 导出尾部结构调整。非最终导出块只输出到“是否故障”行，不再写“设备完好率/备注”；最后一个有点位的块承载设备完好率和备注，备注区域合并填充到该页块底部；最后页不再额外生成空占位块。
 >
 > 2026-07-08 补充：ExcelJS 默认打印 DPI 可能导致整个工作簿异常，导出前必须清理异常 `pageSetup`；L1 最后有效点位块备注栏必须纵向合并到打印区域底行。
+>
+> 2026-07-10 补充：`L2Template.availableL1Ids` 与 `L3Template.availableL2Ids` 是关联项唯一顺序来源；项目与导出必须使用 `projectOrder.ts` 消费此顺序。L1 的结果组合与权值只在模板维护，项目新建/新增时复制为快照，不能因模板后续修改回写旧项目。单对象包由 `objectPackage.ts` 处理，导入先校验完整依赖闭包、重映射冲突 ID，再作为副本写入；不得改动 `backup.ts` 的全量整体替换语义。
+>
+> 2026-07-10 追加：L1 模板检查项目超过单页时，必须由 `buildL1VerticalRowSlices()` 按实际行高纵向分页；每页重复设施标题与双行表头，禁止拆开单条检查项目。每个点位段的末个纵向页才写“是否故障”，整张 L1 的末个纵向页才写“设备完好率/备注”；6 点位满段后的独立汇总块与长备注独立页规则继续保留。
 
 ---
+
+> 2026-07-11 追加：检查体系结构恢复普通清单的打印设置，不生成自定义分页打印区域。L1 普通点位分页保留同 Sheet 横向页块；左右列块独立计算纵向位置，避免备注共享 Excel 行高拉伸另一列。L1 序号按检查项目组合并后连续编号。
+>
+> 2026-07-11 追加：长检查项目导出必须调用 getOrMigrateLayout 取得与录入界面一致的左右切片坐标；同一行页的地点段在 Excel 中分别写入对应横向列块，禁止按地点段串行向下输出。
+>
+> 2026-07-11 追加：长检查项目纵向分页必须从前向后优先填满普通页；为避免页面留白，允许在检查项目组内于行边界拆页，但单条检查项目不得拆开，续页沿用原组名与组序号。汇总列属于最后一个有效点位段；该段被纵向拆成多页时，每个页块均保留汇总列，设备完好率和备注仍只写在其最后一页。
+>
+> 2026-07-11 追加：所有 L1 Excel 必须统一走 `buildL1PaginatedSheet()`，禁止短表/长表使用两套布局器。每个自定义打印区域的实际行高不得超过 `getUsablePageHeightPt()`；点位段位置复用软件自动布局，真实点位刚好占满 6 槽时，附加汇总块必须放到首个表块右侧。分页器取走普通页全部检查项但尾部放不下时，必须保留有效最终分片，不能返回 `isLast=false` 的唯一分片。
+>
+> 2026-07-11 追加：L1 页内备注和独立备注页的余高必须通过纵向合并多个正常高度单元格实现，禁止设置单个超高备注行。Excel 行高在整行共享，备注区跨行时必须同步扩展当前打印区域和后续表块起始行，避免拉伸同 Sheet 左侧或下方表块。
+>
+> 2026-07-11 追加：最后有效点位段（含备注）必须在其软件布局列内紧跟前一普通点位段；不得因备注占高而拉伸其他列。点位数正好为 6 的倍数时，不得生成空的 5 点位 + 汇总列占位表；设备完好率写入最后一个真实结果槽，备注直接附在最后真实点位表下。
+>
+> 2026-07-11 追加：同一 Excel 列内连续点位表块（包括最终带备注行页）若包含表块间隔后的实际总行高不超过 `getUsablePageHeightPt()`，必须合并为同一个 Print Area；最终备注只填充该 Print Area 的剩余高度，确实放不下才独立分页。
+>
+> 2026-07-12 追加：项目级 `locationItems` 与 L1 `InspectionTableData.checkpoints` 必须双向同步。点位清单变更继续走 `syncLocationItemToProject()`；L1 录入页的新增、删除、改名必须走 `syncInspectionDataToLocationItem()` 回写数量和名称，移除 L1 同时移除对应点位清单。
+>
+> 2026-07-12 追加：L2 合计设备完好率与分部评分共用关键设备规则：关键设备 L1/结果组合的最低完好率为全部 L1/组合最低值时取该值，否则按总量和故障数量计算。结果组合仅在全部来源 L1 均为关键设备时标识为关键设备，计算预览和所有前置清单统一显示 `*`。
 
 ## 🚨 首要行动 (MANDATORY FIRST STEP)
 
@@ -130,7 +152,7 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 | `CHANGELOG.md` (项目根) | 追加式修改日志 | 中 |
 | `00_BOOT.md` (项目根) | 兼容跳转入口（请优先看 `ONGOING.md`） | 低 |
 | `src/types/cell.ts` | 四色语义枚举、颜色映射、可编辑判定 | 低 |
-| `src/types/template.ts` | L1/L2/L3 模板类型（含 InspectionItem.inspectionMethod / DeductionItem / **GradeThreshold** / **L3SubdivisionWeight**） | 中 |
+| `src/types/template.ts` | L1/L2/L3 模板类型（含 L1 结果组合默认值、InspectionItem.inspectionMethod / DeductionItem / **GradeThreshold** / **L3SubdivisionWeight**） | 中 |
 | `src/types/project.ts` | 项目、分部、点检实例（含 requirementOverrides/notes/**segmentBreaks**/**segmentLayout**/rowBreaks/ScoringData/**summaryWeight**） | 中 |
 | `src/types/device.ts` | 检查设备库类型（设备名称/型号/单位/设备编号/用途），设备清单数量固定为 1 | 中 |
 | `src/stores/templateStore.ts` | 模板三级 CRUD 状态管理 (Pinia) | 中 |
@@ -138,14 +160,16 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 | `src/config/excelLayout.ts` | Excel 导出版式集中配置：L1 打印页边距/列宽/比例、L2/L3/清单列宽、行高、打印缩放、颜色与边框 | 高 |
 | `src/utils/storage.ts` | 文件存储封装（前端→Rust） | 中 |
 | `src/utils/backup.ts` | 单 JSON 全量系统数据导入导出（模板/项目/设备库），导入为整体替换 | 中 |
+| `src/utils/objectPackage.ts` | 项目/L1/L2/L3 单对象包：依赖闭包、格式校验、冲突 ID 重映射、回滚写入 | 中 |
+| `src/utils/projectOrder.ts` | 模板关联顺序消费工具：项目分部、L1 和点位清单稳定排序 | 中 |
 | `src/utils/id.ts` | UUID 生成 + 时间戳工具 | 低 |
 | `src/utils/projectStructure.ts` | 项目级点位清单迁移与同步工具，负责点位清单 ↔ L2/L1/检查点列结构同步，并提供 L3 模板权值归一化/读取工具 | 高 |
 | `src/utils/segmentLayout.ts` | **【Phase 11/15 重构】** 坐标式布局工具函数（computeSegments / getOrMigrateLayout / buildLayoutGrid / getMaxGridRow / getMaxGridCol），主要服务 UI 分段与旧布局兼容 | 中 |
-| `src/utils/l1PrintLayout.ts` | **【新增】** L1 打印分页工具：读取 `excelLayout.ts` 配置，负责动态行高估算 / 逻辑分页 + Worksheet 页块布局 + 页型动态列宽；`buildL1PrintPages` 供 UI 预览，`buildL1ExportPrintPages` 供导出分页与备注独立页 | 中 |
+| `src/utils/l1PrintLayout.ts` | L1 打印分页工具：动态行高估算、点位横向分段、检查项目纵向分页、Worksheet 页块布局与页型动态列宽 | 中 |
 | `src/utils/projectCalc.ts` | **【新增】** 项目/L3 汇总计算共享工具（总量 / 故障数量 / 合格率 / L2 等级阈值标度 / 分部评分 / 分部权值加权总合格率 / 检查结果计算预览），供 `excelExport.ts` 与 `ProjectEditor.vue` 共用 | 中 |
 | `src/utils/projectRequirement.ts` | 项目级技术要求覆盖与缺失校验工具：模板技术要求留空时在项目点检表填写，保存仅提醒，导出前强拦截 | 中 |
 | `src/utils/numericRule.ts` | 数值条件判定引擎（UI/导出复用）：`parseNumeric / evalNumericRule / isPassed` | 中 |
-| `src/utils/excelExport.ts` | Excel 导出核心逻辑：读取 `excelLayout.ts` 配置，复用 `l1PrintLayout.ts` + `projectCalc.ts`；L1 显式写入 Excel `pageSetup`、按横向页块排布；列宽按页型动态铺满；同位次备注行共享高度；末页汇总列按段索引判定 | 中 |
+| `src/utils/excelExport.ts` | Excel 导出核心逻辑：读取 excelLayout.ts 配置，复用 l1PrintLayout.ts 与 projectCalc.ts；所有 L1 统一按软件点位段布局和独立 A4 打印区域导出；序号按检查项目组连续编号 | 中 |
 | `src/views/TemplateManager/TemplateManager.vue` | 模板管理主页：三级 Tab + 搜索 + 迷你预览 | 高 |
 | `src/views/TemplateManager/L1TemplateDialog.vue` | L1 模板创建/编辑对话框（文本下拉固定 + 数值条件配置） | 中 |
 | `src/views/TemplateManager/L2TemplateDialog.vue` | L2 模板创建/编辑 + 穿梭框关联 L1 | 中 |
@@ -192,8 +216,8 @@ Tauri v2 + Vue 3 (Script Setup) + TypeScript (strict) + Element Plus + ExcelJS
 - **UI 分段系统**：`segmentLayout: SegmentPosition[]` 存储各段的 2D 网格坐标，由 `segmentLayout.ts` 管理，主要用于录入界面与旧数据兼容
 - **打印分页系统**：L1 导出改由 `l1PrintLayout.ts` 按“实际内容高度 + Excel 常规页边距打印区”分页，不能再假设 `rowCount * 固定行高`
 - **旧数据兼容**：`getOrMigrateLayout()` 自动将旧 `rowBreaks` 数据迁移，加载旧项目时透明处理
-- **分页关键点**：技术要求行高、备注基础行高、每页余高均分给备注行、打印安全余量，这四者都会影响最终页数
-- **打印落地方式**：L1 先按真实打印区做逻辑分页，再在同一张 Sheet 内按横向页块排布；同位次备注行按跨页块共享高度，打印顺序使用 `overThenDown`
+- **分页关键点**：技术要求行高、备注基础行高、固定表块间隔、仅末备注区承接余高、打印安全余量都会影响最终页数
+- **打印落地方式**：L1 先按真实打印区做逻辑分页，普通页按横向页块排布；最终备注页写入下方独立区域，避免与普通页共享行高
 - **ExcelJS 打印参数清理**：ExcelJS 可能写入 `horizontalDpi/verticalDpi=4294967295`，导致部分 Excel 版本提示整个工作簿异常；导出前必须经 `sanitizeWorkbookPageSetup()` 清理异常 DPI、打印机默认值和冲突缩放字段
 
 ### 4. 数据一致性
@@ -265,12 +289,14 @@ function onDragLeave(e: DragEvent) {
 - 每段最多 **6 个地点**，自动计算 `segmentBreaks`
 - L1 导出显式写入 **A4 竖向 + 常规页边距（上下 1.91cm、左右 1.78cm、页眉页脚 0.76cm）+ 100% 缩放**
 - L1 导出分页按**实际内容高度**判断：标题行、技术要求自动行高、故障行、合格率行、备注基础行高全部计入
+- 检查项目超过单页时，按行高切成多个独立打印区域；每页重复标题/双行表头，单条检查项目不得跨页
 - 当前页放不下下一个表格时，后续表格整体移动到下一页，不再按固定 `segmentsPerCol` 预估
-- 同一张 L1 Sheet 内按页**横向页块排布**，后续逻辑页显示在右侧页块而不是下方
-- L1 横向页块必须写入 Excel 原生列分页符，固定每个 9 列页块为 1 张 A4，避免 Excel 自动分页把双页块拆成 3 页
-- 每一页剩余高度会**平均分配到该页所有表格的备注行**，确保页面纵向铺满
-- 同位次表格的备注行高度按跨页块共享值统一，避免左右页块因行高不同而错位
-- 最后有效点位块的备注栏必须纵向合并到 L1 打印区域底行；若最后页下方存在空槽位，用备注合并区域填满空槽，不能只增加单行行高
+- 同一张 L1 Sheet 内普通逻辑页按**横向页块排布**；最终备注页显示在下方独立区域
+- L1 横向普通页固定为 9 列 A4；最终备注页不参与横向行高共享
+- 每一页剩余高度只能补到**最底部有效表块的备注行**；表块之间始终保持固定间隔
+- 长表中每个点位段的故障行只在其最后一个纵向页输出；设备完好率与备注只在全表最后一个纵向页输出
+- 普通横向页共享自身表块行高；最终备注页独立成行，非最终页不承接其备注高度
+- 最后有效点位块的备注栏必须填充到自身 L1 打印区域底行，不能拉伸其他打印区域
 - **汇总列 / 备注页**：UI 分段预览每段最多 6 个地点；Excel 导出结果区保持 6 个槽位，非最终块最多 6 个地点，最终汇总块最多 5 个地点 + 1 个汇总列，并在“设备完好率”行汇总列写整表完好率；若真实点位刚好填满 6 点位块，则追加 5 个空点位 + 汇总列作为最终汇总块；非最终块只输出到“是否故障”行；最终点位块备注至少预留 3 行文本高度，备注超过 3 行或页尾放不下时，备注独立生成 1 个 A4 页块并填充完整 A4 打印区域；独立备注页必须写入下方独立多打印区域，不要放在右侧横向页块内，避免继承正文行分页
 - **设施名称标题行**：整行不显示边框，避免打印出现多余线框
 - **列宽**：无汇总页地点列 = 10；有汇总页地点列 = 8、汇总列 = 10；`序号 / 检查项目 / 技术要求` 按 `1:3:6` 分配该页剩余可打印宽度，使每个页块横向铺满

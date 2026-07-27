@@ -20,12 +20,14 @@ import {
   hasDataBeyondQuantity,
   normalizeCheckpointNames,
   removeLocationItemFromProject,
+  syncInspectionDataToLocationItem,
   syncLocationItemToProject,
 } from '@/utils/projectStructure'
 import {
   findMissingProjectRequirements,
 } from '@/utils/projectRequirement'
 import { generateId } from '@/utils/id'
+import { getOrderedL1Ids, getOrderedLocationItems, getOrderedProjectSubdivisions } from '@/utils/projectOrder'
 
 const route = useRoute()
 const router = useRouter()
@@ -42,15 +44,23 @@ const project = computed(() =>
 // ---- 当前选中的分部索引 ----
 const activeSubIndex = ref(0)
 
-const currentSub = computed(() =>
-  project.value?.subdivisions[activeSubIndex.value] ?? null
-)
-
 const currentL3Template = computed(() =>
   project.value?.l3TemplateId
     ? templateStore.l3Templates.find(t => t.id === project.value!.l3TemplateId) ?? null
     : null
 )
+
+const orderedSubdivisions = computed(() =>
+  project.value ? getOrderedProjectSubdivisions(project.value, currentL3Template.value) : []
+)
+
+const currentSub = computed(() => orderedSubdivisions.value[activeSubIndex.value] ?? null)
+
+const currentL1Ids = computed(() => {
+  if (!currentSub.value) return []
+  const l2 = templateStore.l2Templates.find(template => template.id === currentSub.value!.l2TemplateId)
+  return getOrderedL1Ids(currentSub.value, l2)
+})
 
 function getTemplateSummaryWeight(l2TemplateId: string): number {
   return getL3SubdivisionWeight(currentL3Template.value, l2TemplateId)
@@ -123,7 +133,9 @@ const selectableL2Templates = computed(() => {
   if (project.value.l3TemplateId) {
     const l3 = templateStore.l3Templates.find(t => t.id === project.value!.l3TemplateId)
     if (l3) {
-      available = available.filter(t => l3.availableL2Ids.includes(t.id))
+      available = l3.availableL2Ids
+        .map(id => templateStore.l2Templates.find(template => template.id === id))
+        .filter((template): template is NonNullable<typeof template> => Boolean(template))
     }
   }
   
@@ -157,16 +169,17 @@ function confirmAddSubdivision() {
   }
 
   project.value.subdivisions.push(sub)
-  activeSubIndex.value = project.value.subdivisions.length - 1
+  activeSubIndex.value = getOrderedProjectSubdivisions(project.value, currentL3Template.value)
+    .findIndex(item => item === sub)
   showAddSubDialog.value = false
   scheduleSave()
   ElMessage.success('分部已添加')
 }
 
 // ---- 删除分部 ----
-async function removeSubdivision(index: number) {
+async function removeSubdivision(subdivision: ProjectSubdivision) {
   if (!project.value) return
-  const subName = project.value.subdivisions[index]?.l2TemplateName || '未命名分部'
+  const subName = subdivision.l2TemplateName || '未命名分部'
   try {
     await ElMessageBox.confirm(
       `确定删除分部「${subName}」？该分部下所有数据将不可恢复。`,
@@ -176,9 +189,9 @@ async function removeSubdivision(index: number) {
   } catch {
     return
   }
-  project.value.subdivisions.splice(index, 1)
-  if (activeSubIndex.value >= project.value.subdivisions.length) {
-    activeSubIndex.value = Math.max(0, project.value.subdivisions.length - 1)
+  project.value.subdivisions = project.value.subdivisions.filter(sub => sub !== subdivision)
+  if (activeSubIndex.value >= orderedSubdivisions.value.length - 1) {
+    activeSubIndex.value = Math.max(0, orderedSubdivisions.value.length - 1)
   }
   scheduleSave()
   ElMessage.success('分部已删除')
@@ -226,7 +239,8 @@ function saveInfoDialog() {
 
 async function removeL1FromSubdivision(l1Id: string) {
   if (!currentSub.value) return
-  const l1Name = currentSub.value.inspectionData[l1Id]?.l1TemplateName || '(未知)'
+  const subdivision = currentSub.value
+  const l1Name = subdivision.inspectionData[l1Id]?.l1TemplateName || '(未知)'
   try {
     await ElMessageBox.confirm(
       `确定移除点检表「${l1Name}」？该表所有填入数据将丢失。`,
@@ -236,12 +250,21 @@ async function removeL1FromSubdivision(l1Id: string) {
   } catch {
     return
   }
-  const idx = currentSub.value.selectedL1Ids.indexOf(l1Id)
+  const idx = subdivision.selectedL1Ids.indexOf(l1Id)
   if (idx > -1) {
-    currentSub.value.selectedL1Ids.splice(idx, 1)
-    delete currentSub.value.inspectionData[l1Id]
+    const locationItem = project.value?.locationItems?.find(item =>
+      item.l2TemplateId === subdivision.l2TemplateId && item.l1TemplateId === l1Id,
+    )
+    if (project.value && locationItem) {
+      removeLocationItemFromProject(project.value, locationItem)
+    } else {
+      subdivision.selectedL1Ids.splice(idx, 1)
+      delete subdivision.inspectionData[l1Id]
+    }
     if (activeL1Id.value === l1Id) {
-      activeL1Id.value = currentSub.value.selectedL1Ids[0] ?? null
+      activeL1Id.value = project.value?.subdivisions
+        .find(item => item.l2TemplateId === subdivision.l2TemplateId)
+        ?.selectedL1Ids[0] ?? null
     }
     scheduleSave()
     ElMessage.success('点检表已移除')
@@ -252,7 +275,10 @@ function getL1Template(l1Id: string) {
   return templateStore.l1Templates.find(t => t.id === l1Id)
 }
 
-function handleInspectionUpdate(_data: InspectionTableData) {
+function handleInspectionUpdate(data: InspectionTableData) {
+  if (project.value && currentSub.value) {
+    syncInspectionDataToLocationItem(project.value, currentSub.value, data)
+  }
   scheduleSave()
 }
 
@@ -260,7 +286,7 @@ function handleInspectionUpdate(_data: InspectionTableData) {
 const locationItems = computed(() => {
   if (!project.value) return []
   ensureProjectLocationItems(project.value)
-  return project.value.locationItems ?? []
+  return getOrderedLocationItems(project.value, templateStore.l2Templates, currentL3Template.value)
 })
 
 const showAddLocationDialog = ref(false)
@@ -270,8 +296,6 @@ const locationDraft = ref({
   unit: '',
   quantity: 1,
   checkpointNames: defaultCheckpointNames(1),
-  resultGroupName: '',
-  resultWeight: 1,
 })
 
 const locationSelectableL2Templates = computed(() => selectableL2Templates.value.concat(
@@ -281,7 +305,9 @@ const locationSelectableL2Templates = computed(() => selectableL2Templates.value
 const locationDraftL1Templates = computed(() => {
   const l2 = templateStore.l2Templates.find(t => t.id === locationDraft.value.l2TemplateId)
   if (!l2) return []
-  return templateStore.l1Templates.filter(t => l2.availableL1Ids.includes(t.id))
+  return l2.availableL1Ids
+    .map(id => templateStore.l1Templates.find(template => template.id === id))
+    .filter((template): template is NonNullable<typeof template> => Boolean(template))
 })
 
 function openAddLocationDialog() {
@@ -291,8 +317,6 @@ function openAddLocationDialog() {
     unit: '',
     quantity: 1,
     checkpointNames: defaultCheckpointNames(1),
-    resultGroupName: '',
-    resultWeight: 1,
   }
   showAddLocationDialog.value = true
 }
@@ -339,12 +363,12 @@ async function confirmAddLocationItem() {
     unit: locationDraft.value.unit.trim(),
     quantity: names.length,
     checkpointNames: names,
-    resultGroupName: locationDraft.value.resultGroupName.trim(),
-    resultWeight: locationDraft.value.resultWeight,
+    resultGroupName: l1.resultGroupName?.trim() || undefined,
+    resultWeight: l1.resultWeight ?? 1,
   }
   ensureProjectLocationItems(project.value)
   project.value.locationItems!.push(item)
-  syncLocationItemToProject(project.value, item, l1, getTemplateSummaryWeight(l2.id))
+  syncLocationItemToProject(project.value, item, l1, getTemplateSummaryWeight(l2.id), l2)
   showAddLocationDialog.value = false
   scheduleSave()
   ElMessage.success('点位清单已添加')
@@ -405,7 +429,8 @@ function syncProjectLocationItem(item: ProjectLocationItem) {
   const l1 = templateStore.l1Templates.find(t => t.id === item.l1TemplateId)
   if (!l1) return
   item.checkpointNames = normalizeCheckpointNames(item.checkpointNames ?? [], item.quantity)
-  syncLocationItemToProject(project.value, item, l1, getTemplateSummaryWeight(item.l2TemplateId))
+  const l2 = templateStore.l2Templates.find(template => template.id === item.l2TemplateId)
+  syncLocationItemToProject(project.value, item, l1, getTemplateSummaryWeight(item.l2TemplateId), l2)
   scheduleSave()
 }
 
@@ -489,17 +514,19 @@ const saveStatusText = computed(() => {
 const calcPreview = computed(() =>
   project.value
     ? buildProjectCalcPreview(project.value, templateStore.l1Templates, {
+        l2Templates: templateStore.l2Templates,
+        l3Template: currentL3Template.value,
         getSubdivisionWeight: sub => getEffectiveSummaryWeight(sub),
       })
     : null
 )
 
 const resultRows = computed(() =>
-  project.value ? buildResultListRowsWithGrades(project.value, templateStore.l1Templates, templateStore.l2Templates) : []
+  project.value ? buildResultListRowsWithGrades(project.value, templateStore.l1Templates, templateStore.l2Templates, currentL3Template.value) : []
 )
 
 const deviceRows = computed(() =>
-  project.value ? buildDeviceListRows(project.value, templateStore.l1Templates, templateStore.deviceItems) : []
+  project.value ? buildDeviceListRows(project.value, templateStore.l1Templates, templateStore.deviceItems, templateStore.l2Templates, currentL3Template.value) : []
 )
 
 // ---- 初始化 ----
@@ -521,8 +548,8 @@ watch(currentSub, sub => {
     activeL1Id.value = null
     return
   }
-  if (activeL1Id.value && sub.selectedL1Ids.includes(activeL1Id.value)) return
-  activeL1Id.value = sub.selectedL1Ids[0] ?? null
+  if (activeL1Id.value && currentL1Ids.value.includes(activeL1Id.value)) return
+  activeL1Id.value = currentL1Ids.value[0] ?? null
 }, { immediate: true })
 
 watch(() => locationDraft.value.l2TemplateId, () => {
@@ -580,7 +607,7 @@ watch(() => locationDraft.value.l2TemplateId, () => {
       <div class="sub-tabs">
         <div class="sub-tabs-list">
           <div
-            v-for="(sub, idx) in project.subdivisions"
+            v-for="(sub, idx) in orderedSubdivisions"
             :key="idx"
             class="sub-tab"
             :class="{ active: activeSubIndex === idx }"
@@ -593,7 +620,7 @@ watch(() => locationDraft.value.l2TemplateId, () => {
               text
               type="danger"
               class="sub-tab-delete"
-              @click.stop="removeSubdivision(idx)"
+              @click.stop="removeSubdivision(sub)"
             />
           </div>
           <div class="sub-tab add-tab" @click="activeProjectTab = 'locations'">
@@ -607,7 +634,7 @@ watch(() => locationDraft.value.l2TemplateId, () => {
       <div v-if="currentSub" class="sub-content">
         <div class="content-header">
           <h3>{{ currentSub.l2TemplateName }}</h3>
-          <span class="meta-info">关联 {{ currentSub.selectedL1Ids.length }} 个 L1 点检表</span>
+          <span class="meta-info">关联 {{ currentL1Ids.length }} 个 L1 点检表</span>
         </div>
 
         <!-- L1 点检表选择区 -->
@@ -620,13 +647,13 @@ watch(() => locationDraft.value.l2TemplateId, () => {
 
         <!-- L1 点检表数据录入区 -->
         <div class="inspection-tables-area">
-          <div v-if="currentSub.selectedL1Ids.length === 0" class="no-l1-hint">
+          <div v-if="currentL1Ids.length === 0" class="no-l1-hint">
             <p>当前分部暂无点检表，请先在点位清单页添加点位</p>
           </div>
           <template v-else>
             <div class="l1-tabs">
               <div
-                v-for="l1Id in currentSub.selectedL1Ids"
+                v-for="l1Id in currentL1Ids"
                 :key="l1Id"
                 class="l1-tab"
                 :class="{ active: activeL1Id === l1Id }"
@@ -708,16 +735,6 @@ watch(() => locationDraft.value.l2TemplateId, () => {
           <el-table-column type="index" label="#" width="56" />
           <el-table-column prop="l2TemplateName" label="分部工程" min-width="150" />
           <el-table-column prop="l1TemplateName" label="分项点检表" min-width="170" />
-          <el-table-column label="结果组合" width="150">
-            <template #default="{ row }">
-              <el-input v-model="row.resultGroupName" size="small" placeholder="同名合并" @change="syncProjectLocationItem(row)" />
-            </template>
-          </el-table-column>
-          <el-table-column label="权重" width="120">
-            <template #default="{ row }">
-              <el-input-number v-model="row.resultWeight" :min="0" :step="0.1" size="small" controls-position="right" @change="syncProjectLocationItem(row)" />
-            </template>
-          </el-table-column>
           <el-table-column label="单位" width="110">
             <template #default="{ row }">
               <el-input v-model="row.unit" size="small" @change="syncProjectLocationItem(row)" />
@@ -828,22 +845,6 @@ watch(() => locationDraft.value.l2TemplateId, () => {
             <el-select v-model="locationDraft.l1TemplateId" placeholder="请选择点检表" filterable style="width: 100%">
               <el-option v-for="tpl in locationDraftL1Templates" :key="tpl.id" :label="tpl.name" :value="tpl.id" />
             </el-select>
-          </div>
-        </div>
-        <div class="form-row" style="margin-top: 12px">
-          <div class="form-field">
-            <label>结果组合</label>
-            <el-input v-model="locationDraft.resultGroupName" placeholder="同名点检表合并计算" />
-          </div>
-          <div class="form-field">
-            <label>组合权重</label>
-            <el-input-number
-              v-model="locationDraft.resultWeight"
-              :min="0"
-              :step="0.1"
-              controls-position="right"
-              style="width: 100%"
-            />
           </div>
         </div>
         <div class="form-row" style="margin-top: 12px">

@@ -55,16 +55,12 @@ export interface L1PageBlockSpec {
   summaryColW: number
 }
 
-export interface L1WorksheetLayout {
-  maxSegmentsPerPage: number
-  slotStartRows: number[]
-  slotEndRows: number[]
-  slotGapRows: number[]
-  slotNotesRowHeights: number[]
-  pageStartCols: number[]
-  pageBlockSpecs: L1PageBlockSpec[]
-  totalRows: number
-  totalCols: number
+/** 单个点位段内按检查项目行切分的纵向打印页。 */
+export interface L1VerticalRowSlice {
+  startIndex: number
+  endIndex: number
+  dataHeight: number
+  isLast: boolean
 }
 
 interface SegmentMetric {
@@ -104,7 +100,7 @@ function buildL1PrintPagesCore(
   if (totalCols <= 0) return []
 
   const segments = splitOverflowNotes
-    ? buildExportSegments(totalCols)
+    ? buildL1ExportSegments(totalCols)
     : buildPreviewSegments(totalCols)
   const breaks = segments
     .slice(1)
@@ -230,14 +226,9 @@ function buildL1PrintPagesCore(
     const gapTotal = pageMetrics.length > 1 ? (pageMetrics.length - 1) * L1_PRINT_LAYOUT.pageGapPt : 0
     const baseHeightSum = pageMetrics.reduce((sum, metric) => sum + metric.baseHeight, 0)
     const remainingHeight = Math.max(0, availableHeight - baseHeightSum - gapTotal)
-    const extraPerSegment = pageMetrics.length > 0 ? remainingHeight / pageMetrics.length : 0
-
-    let distributed = 0
     const segmentsOnPage = pageMetrics.map((metric, idx) => {
-      const extra = idx === pageMetrics.length - 1
-        ? Math.max(0, remainingHeight - distributed)
-        : extraPerSegment
-      distributed += extra
+      // 表块之间的间隔固定，余高只补到页面最底部的备注区。
+      const extra = idx === pageMetrics.length - 1 ? remainingHeight : 0
 
       return {
         index: metric.index,
@@ -263,129 +254,6 @@ function buildL1PrintPagesCore(
       extraHeight: remainingHeight,
     }
   })
-}
-
-export function buildL1WorksheetLayout(
-  template: L1Template,
-  data: InspectionTableData,
-  pages: L1PrintPageLayout[],
-): L1WorksheetLayout {
-  if (pages.length === 0) {
-    return {
-      maxSegmentsPerPage: 0,
-      slotStartRows: [],
-      slotEndRows: [],
-      slotGapRows: [],
-      slotNotesRowHeights: [],
-      pageStartCols: [],
-      pageBlockSpecs: [],
-      totalRows: 0,
-      totalCols: 0,
-    }
-  }
-
-  const maxSegmentsPerPage = Math.max(...pages.map(page => page.segments.length))
-  const availableHeight = pages[0]?.availableHeight ?? getUsablePageHeightPt()
-  const staticHeight = getL1StaticSegmentHeight(template, data)
-  const slotBaseNotesRowHeights: number[] = Array.from(
-    { length: maxSegmentsPerPage },
-    () => L1_PRINT_LAYOUT.notesRowH,
-  )
-  const slotNotesRowHeights: number[] = Array.from(
-    { length: maxSegmentsPerPage },
-    () => L1_PRINT_LAYOUT.notesRowH,
-  )
-
-  pages.forEach(page => {
-    page.segments.forEach((seg, slotIndex) => {
-      slotBaseNotesRowHeights[slotIndex] = Math.max(
-        slotBaseNotesRowHeights[slotIndex],
-        seg.baseNotesRowHeight,
-      )
-      slotNotesRowHeights[slotIndex] = Math.max(
-        slotNotesRowHeights[slotIndex],
-        seg.notesRowHeight,
-      )
-    })
-  })
-
-  const gapTotal = maxSegmentsPerPage > 1
-    ? (maxSegmentsPerPage - 1) * L1_PRINT_LAYOUT.pageGapPt
-    : 0
-  const sharedHeightSum =
-    (staticHeight * maxSegmentsPerPage) +
-    gapTotal +
-    slotNotesRowHeights.reduce((sum, height) => sum + height, 0)
-
-  if (sharedHeightSum > availableHeight) {
-    const minHeightSum =
-      (staticHeight * maxSegmentsPerPage) +
-      gapTotal +
-      slotBaseNotesRowHeights.reduce((sum, height) => sum + height, 0)
-    const remainingHeight = Math.max(0, availableHeight - minHeightSum)
-    const extraPerSlot = maxSegmentsPerPage > 0 ? remainingHeight / maxSegmentsPerPage : 0
-
-    let distributed = 0
-    slotBaseNotesRowHeights.forEach((baseHeight, slotIndex) => {
-      const extra = slotIndex === maxSegmentsPerPage - 1
-        ? Math.max(0, remainingHeight - distributed)
-        : extraPerSlot
-      distributed += extra
-      slotNotesRowHeights[slotIndex] = baseHeight + extra
-    })
-  } else {
-    const remainingHeight = Math.max(0, availableHeight - sharedHeightSum)
-    const extraPerSlot = maxSegmentsPerPage > 0 ? remainingHeight / maxSegmentsPerPage : 0
-
-    let distributed = 0
-    slotNotesRowHeights.forEach((height, slotIndex) => {
-      const extra = slotIndex === maxSegmentsPerPage - 1
-        ? Math.max(0, remainingHeight - distributed)
-        : extraPerSlot
-      distributed += extra
-      slotNotesRowHeights[slotIndex] = height + extra
-    })
-  }
-
-  const slotStartRows: number[] = []
-  const slotEndRows: number[] = []
-  const slotGapRows: number[] = []
-  let row = 1
-  const segmentRowCount = getL1SegmentRowCount(template)
-
-  for (let slotIndex = 0; slotIndex < maxSegmentsPerPage; slotIndex++) {
-    slotStartRows.push(row)
-    row += segmentRowCount
-    slotEndRows.push(row - 1)
-
-    if (slotIndex < maxSegmentsPerPage - 1) {
-      slotGapRows.push(row)
-      row += 1
-    }
-  }
-
-  const pageBlockSpecs = pages.map(page =>
-    getL1PageBlockSpec(page.segments.some(seg => seg.hasSummarySlot || seg.isNotesOnly)),
-  )
-
-  const pageStartCols: number[] = []
-  let col = 1
-  pageBlockSpecs.forEach(spec => {
-    pageStartCols.push(col)
-    col += spec.colCount
-  })
-
-  return {
-    maxSegmentsPerPage,
-    slotStartRows,
-    slotEndRows,
-    slotGapRows,
-    slotNotesRowHeights,
-    pageStartCols,
-    pageBlockSpecs,
-    totalRows: Math.max(0, row - 1),
-    totalCols: Math.max(0, col - 1),
-  }
 }
 
 export function estimateWrappedRowHeight(
@@ -511,16 +379,15 @@ function buildPreviewSegments(totalCols: number): Array<{ index: number; startCo
   return segments
 }
 
-function buildExportSegments(totalCols: number): Array<{ index: number; startCol: number; endCol: number }> {
-  const finalLocationSlotCount = getL1LocationSlotCount(true)
-  if (totalCols <= finalLocationSlotCount) {
+export function buildL1ExportSegments(totalCols: number): Array<{ index: number; startCol: number; endCol: number }> {
+  if (totalCols <= L1_PRINT_LAYOUT.maxLocPerSeg) {
     return [{ index: 0, startCol: 0, endCol: totalCols - 1 }]
   }
 
   const segments: Array<{ index: number; startCol: number; endCol: number }> = []
   let startCol = 0
 
-  while (totalCols - startCol > finalLocationSlotCount) {
+  while (totalCols - startCol > L1_PRINT_LAYOUT.maxLocPerSeg) {
     const endCol = Math.min(totalCols - 1, startCol + L1_PRINT_LAYOUT.maxLocPerSeg - 1)
     segments.push({ index: segments.length, startCol, endCol })
     startCol = endCol + 1
@@ -539,31 +406,123 @@ function getL1StaticSegmentHeight(
   template: L1Template,
   data: InspectionTableData,
 ): number {
-  const dataRowHeights = template.inspectionItems.map((item, rowIdx) => {
-    const manualRowHeight = Math.max(
-      pxToPoints(item.rowHeight),
-      pxToPoints(data.rowHeights?.[rowIdx]),
-    )
-    return estimateWrappedRowHeight(
-      item.requirement,
-      L1_PRINT_LAYOUT.reqColW,
-      L1_PRINT_LAYOUT.dataFontSize,
-      Math.max(L1_PRINT_LAYOUT.dataRowH, manualRowHeight),
-    )
-  })
-
   return (
-    L1_PRINT_LAYOUT.titleRowH +
-    L1_PRINT_LAYOUT.headerRow1H +
-    L1_PRINT_LAYOUT.headerRow2H +
-    dataRowHeights.reduce((sum, height) => sum + height, 0) +
+    getL1HeaderHeight() +
+    template.inspectionItems.reduce((sum, item, rowIdx) => sum + getInspectionRowHeight(item, data, rowIdx), 0) +
     (template.faultRow?.enabled ? L1_PRINT_LAYOUT.faultRowH : 0) +
     L1_PRINT_LAYOUT.passRateRowH
   )
 }
 
-function getL1SegmentRowCount(template: L1Template): number {
-  return template.inspectionItems.length + (template.faultRow?.enabled ? 6 : 5)
+/**
+ * 将检查项目按实际行高切成可打印页。普通页从前向后优先填满，
+ * 仅最后一页预留尾部行高度；每个检查项目行保持完整，不会被拆开。
+ */
+export function buildL1VerticalRowSlices(
+  template: L1Template,
+  data: InspectionTableData,
+  finalTailHeight: number,
+): L1VerticalRowSlice[] {
+  const itemCount = template.inspectionItems.length
+  if (itemCount === 0) return []
+
+  const rowHeights = template.inspectionItems.map((item, index) =>
+    getInspectionRowHeight(item, data, index),
+  )
+  const headerHeight = getL1HeaderHeight()
+  const normalCapacity = Math.max(1, getUsablePageHeightPt() - headerHeight)
+  const finalCapacity = Math.max(1, normalCapacity - Math.max(0, finalTailHeight))
+  const slices: L1VerticalRowSlice[] = []
+  let startIndex = 0
+  while (startIndex < itemCount) {
+    const remainingHeight = sumRowHeights(rowHeights, startIndex, itemCount)
+    if (remainingHeight <= finalCapacity) {
+      slices.push({
+        startIndex,
+        endIndex: itemCount,
+        dataHeight: remainingHeight,
+        isLast: true,
+      })
+      break
+    }
+
+    let endIndex = fitRowPrefix(rowHeights, startIndex, itemCount, normalCapacity)
+    if (endIndex === itemCount) {
+      // 所有剩余检查项虽能塞进普通页，但无法连同尾部一起放入最终页。
+      // 至少留一条检查项给最终页；仅剩单条且尾部仍放不下时，追加空数据尾页。
+      if (itemCount - startIndex === 1) {
+        slices.push({
+          startIndex,
+          endIndex,
+          dataHeight: rowHeights[startIndex],
+          isLast: false,
+        })
+        slices.push({
+          startIndex: itemCount,
+          endIndex: itemCount,
+          dataHeight: 0,
+          isLast: true,
+        })
+        break
+      }
+      endIndex--
+    }
+    slices.push({
+      startIndex,
+      endIndex,
+      dataHeight: sumRowHeights(rowHeights, startIndex, endIndex),
+      isLast: false,
+    })
+    startIndex = endIndex
+  }
+
+  return slices
+}
+
+function sumRowHeights(rowHeights: number[], startIndex: number, endIndex: number): number {
+  return rowHeights
+    .slice(startIndex, endIndex)
+    .reduce((sum, height) => sum + height, 0)
+}
+
+function fitRowPrefix(
+  rowHeights: number[],
+  startIndex: number,
+  endIndex: number,
+  capacity: number,
+): number {
+  let currentIndex = startIndex
+  let height = 0
+  while (currentIndex < endIndex) {
+    const nextHeight = height + rowHeights[currentIndex]
+    if (currentIndex > startIndex && nextHeight > capacity) break
+    height = nextHeight
+    currentIndex++
+  }
+  return currentIndex
+}
+
+function getL1HeaderHeight(): number {
+  return L1_PRINT_LAYOUT.titleRowH +
+    L1_PRINT_LAYOUT.headerRow1H +
+    L1_PRINT_LAYOUT.headerRow2H
+}
+
+function getInspectionRowHeight(
+  item: L1Template['inspectionItems'][number],
+  data: InspectionTableData,
+  rowIndex: number,
+): number {
+  const manualRowHeight = Math.max(
+    pxToPoints(item.rowHeight),
+    pxToPoints(data.rowHeights?.[rowIndex]),
+  )
+  return estimateWrappedRowHeight(
+    item.requirement,
+    L1_PRINT_LAYOUT.reqColW,
+    L1_PRINT_LAYOUT.dataFontSize,
+    Math.max(L1_PRINT_LAYOUT.dataRowH, manualRowHeight),
+  )
 }
 
 function range(start: number, end: number): number[] {

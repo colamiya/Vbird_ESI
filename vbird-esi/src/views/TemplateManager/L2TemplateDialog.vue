@@ -5,6 +5,7 @@
  */
 import { ref, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
+import { ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import type { L2Template, DeductionItem, GradeThreshold } from '@/types'
 import { generateId, nowISO } from '@/utils/id'
 import { useTemplateStore } from '@/stores/templateStore'
@@ -51,6 +52,10 @@ const DEFAULT_GRADES: GradeThreshold[] = [
 
 // 穿梭框数据
 const selectedL1Ids = ref<string[]>([])
+const selectedL1Rows = computed(() => selectedL1Ids.value.map(id => ({
+  id,
+  name: store.l1Templates.find(template => template.id === id)?.name ?? '(已删除模板)',
+})))
 
 // ---- 穿梭框数据源（独占模型：已被其他 L2 占用的 L1 不显示） ----
 const transferData = computed(() => {
@@ -125,6 +130,14 @@ function addGrade() {
 }
 function removeGrade(index: number) {
   gradeThresholds.value.splice(index, 1)
+}
+
+function moveL1(index: number, direction: -1 | 1) {
+  const target = index + direction
+  if (target < 0 || target >= selectedL1Ids.value.length) return
+  const ids = [...selectedL1Ids.value]
+  ;[ids[index], ids[target]] = [ids[target], ids[index]]
+  selectedL1Ids.value = ids
 }
 /** 阈值按分数降序排序，确保匹配顺序正确 */
 function sortedGrades(): GradeThreshold[] {
@@ -275,6 +288,15 @@ function handleSave() {
         filterable
         filter-placeholder="搜索模板"
       />
+      <div v-if="selectedL1Rows.length" class="order-panel">
+        <div class="order-title">导出与项目展示顺序</div>
+        <div v-for="(row, index) in selectedL1Rows" :key="row.id" class="order-row">
+          <span class="order-index">{{ index + 1 }}</span>
+          <span class="order-name">{{ row.name }}</span>
+          <el-tooltip content="上移" placement="top"><el-button :icon="ArrowUp" circle text size="small" :disabled="index === 0" @click="moveL1(index, -1)" /></el-tooltip>
+          <el-tooltip content="下移" placement="top"><el-button :icon="ArrowDown" circle text size="small" :disabled="index === selectedL1Rows.length - 1" @click="moveL1(index, 1)" /></el-tooltip>
+        </div>
+      </div>
     </div>
 
     <template #footer>
@@ -370,4 +392,9 @@ function handleSave() {
 }
 .grade-col-label { flex: 2; min-width: 0; }
 .grade-col-score { width: 120px; flex-shrink: 0; }
+.order-panel { margin-top: var(--space-md); border-top: 1px solid var(--border-color-light); padding-top: var(--space-sm); }
+.order-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-xs); }
+.order-row { display: flex; align-items: center; gap: var(--space-xs); min-height: 32px; }
+.order-index { width: 24px; text-align: center; color: var(--text-tertiary); font-size: 12px; }
+.order-name { flex: 1; min-width: 0; color: var(--text-primary); font-size: 13px; }
 </style>

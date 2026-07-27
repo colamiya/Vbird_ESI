@@ -26,6 +26,7 @@ import {
   findMissingProjectRequirements,
   formatMissingProjectRequirements,
 } from '@/utils/projectRequirement'
+import { exportObjectPackage, importObjectPackage } from '@/utils/objectPackage'
 
 const router = useRouter()
 const projectStore = useProjectStore()
@@ -65,8 +66,6 @@ interface WizardRow {
   unit: string
   quantity: number
   checkpointNames: string[]
-  resultGroupName: string
-  resultWeight: number
   summaryWeight: number
 }
 
@@ -92,8 +91,9 @@ function prepareProjectWizard() {
     : templateStore.l2Templates.map(t => t.id)
 
   const rows: WizardRow[] = []
-  templateStore.l2Templates
-    .filter(l2 => availableL2Ids.includes(l2.id))
+  availableL2Ids
+    .map(id => templateStore.l2Templates.find(l2 => l2.id === id))
+    .filter((l2): l2 is NonNullable<typeof l2> => Boolean(l2))
     .forEach(l2 => l2.availableL1Ids.forEach(l1Id => {
       const l1 = templateStore.l1Templates.find(t => t.id === l1Id)
       if (!l1) return
@@ -107,8 +107,6 @@ function prepareProjectWizard() {
         unit: '',
         quantity: 1,
         checkpointNames: defaultCheckpointNames(1),
-        resultGroupName: '',
-        resultWeight: 1,
         summaryWeight: getL3SubdivisionWeight(selectedL3, l2.id),
       })
     }))
@@ -156,11 +154,12 @@ async function handleCreateProject() {
       unit: row.unit.trim(),
       quantity: names.length,
       checkpointNames: names,
-      resultGroupName: row.resultGroupName.trim(),
-      resultWeight: row.resultWeight,
+      resultGroupName: l1.resultGroupName?.trim() || undefined,
+      resultWeight: l1.resultWeight ?? 1,
     }
     project.locationItems!.push(item)
-    syncLocationItemToProject(project, item, l1, row.summaryWeight)
+    const l2 = templateStore.l2Templates.find(template => template.id === row.l2TemplateId)
+    syncLocationItemToProject(project, item, l1, row.summaryWeight, l2)
   }
 
   await projectStore.saveProject(project)
@@ -244,6 +243,36 @@ async function handleImportBackup() {
   }
 }
 
+function buildObjectPackageCatalog() {
+  return {
+    l1Templates: templateStore.l1Templates,
+    l2Templates: templateStore.l2Templates,
+    l3Templates: templateStore.l3Templates,
+    deviceItems: templateStore.deviceItems,
+    projects: projectStore.projects,
+  }
+}
+
+async function handleExportProjectPackage(project: Project) {
+  try {
+    const path = await exportObjectPackage('project', project.id, buildObjectPackageCatalog())
+    if (path) ElMessage.success('项目对象包已导出')
+  } catch (error: any) {
+    ElMessage.error(`项目对象包导出失败: ${error.message || error}`)
+  }
+}
+
+async function handleImportProjectPackage() {
+  try {
+    const result = await importObjectPackage('project', buildObjectPackageCatalog())
+    if (!result) return
+    await Promise.all([projectStore.loadProjects(), templateStore.loadAll()])
+    ElMessage.success(`已导入${result.importedCount} 个对象`)
+  } catch (error: any) {
+    ElMessage.error(`项目对象包导入失败: ${error.message || error}`)
+  }
+}
+
 function syncWizardQuantity(row: WizardRow) {
   row.checkpointNames = normalizeCheckpointNames(row.checkpointNames, row.quantity)
 }
@@ -289,6 +318,7 @@ onMounted(() => {
         <p class="page-desc">管理工程安全检查项目，进行数据采集与导出</p>
       </div>
       <div class="page-actions">
+        <el-button :icon="Upload" size="large" @click="handleImportProjectPackage">导入项目</el-button>
         <el-button :icon="Upload" size="large" @click="handleImportBackup">导入系统数据</el-button>
         <el-button :icon="Download" size="large" @click="handleExportBackup">导出系统数据</el-button>
         <el-button type="primary" :icon="Plus" size="large" @click="openCreateDialog">新建项目</el-button>
@@ -351,6 +381,7 @@ onMounted(() => {
           <h4 class="card-title">{{ project.name }}</h4>
           <div class="card-actions" @click.stop>
             <el-button :icon="Download" size="small" text type="success" @click="handleExportExcel(project)" :loading="exportingId === project.id" title="导出 Excel" />
+            <el-button :icon="Download" size="small" text @click="handleExportProjectPackage(project)" title="导出项目对象包" />
             <el-button :icon="Edit" size="small" text @click="openProject(project)" />
             <el-button :icon="Delete" size="small" text type="danger" @click="handleDeleteProject(project)" />
           </div>
@@ -420,16 +451,6 @@ onMounted(() => {
           </el-table-column>
           <el-table-column prop="l2TemplateName" label="分部工程" min-width="80" />
           <el-table-column prop="l1TemplateName" label="分项点检表" min-width="85" />
-          <el-table-column label="结果组合" width="130">
-            <template #default="{ row }">
-              <el-input v-model="row.resultGroupName" size="small" placeholder="同名合并" />
-            </template>
-          </el-table-column>
-          <el-table-column label="权重" width="100">
-            <template #default="{ row }">
-              <el-input-number v-model="row.resultWeight" :min="0" :step="0.1" size="small" controls-position="right" style="width: 100%" />
-            </template>
-          </el-table-column>
           <el-table-column label="单位" width="100">
             <template #default="{ row }">
               <el-input v-model="row.unit" size="small" placeholder="台/套" />

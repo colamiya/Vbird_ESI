@@ -2,6 +2,134 @@
 
 > 追加式修改日志。只允许在顶部新增，不允许覆盖或删除历史。
 
+## 2026-07-12
+
+### 全流程模拟验收
+- **路径**：`vbird-esi/tests/full-flow-manual-qa.ts`。
+- **场景**：L1 检查点新增、改名、删除同步；三张关键设备 L1 合并；关键最低值与总量/故障数分支；Excel 前置清单和 L1 打印页。
+- **验证**：模拟工作簿经本机 Excel 实际打开并导出 PDF，11 个 Sheet 对应 11 页；关键组合 `10/1/87.5%`、分部 `15/1/87.5%`，关键标识和黄色列样式正确，未发现截断、重叠或异常空白页。
+
+### L1 点位双向同步与关键设备汇总修复
+- **需求点**：L1 录入页新增检查点未回写点位清单；L2 合计完好率未应用关键设备最低值规则；多个关键设备合并后丢失关键标识。
+- **路径**：`vbird-esi/src/utils/projectStructure.ts`、`vbird-esi/src/utils/projectCalc.ts`、`vbird-esi/src/utils/excelExport.ts`、`vbird-esi/src/views/ProjectEditor/ProjectEditor.vue`、`vbird-esi/tests/template-order-grouping-regression.ts`。
+- **结果**：新增 `syncInspectionDataToLocationItem()` 并接入 L1 更新与删除；L2 合计完好率复用关键设备规则；全部来源为关键设备的组合统一显示 `*`。
+- **验证**：回归覆盖 L1 检查点新增/改名/删除回写、关键组合标识、关键最低值与普通总量故障率两种 L2 口径，以及三张前置清单的 Excel 显示。
+
+## 2026-07-11
+
+### L1 末段备注同列余高合页
+- **需求点**：客户复核亮度检测器后指出，地点 25-26 与地点 19-24 同列且备注可放入剩余高度，却被拆成独立页面。
+- **路径**：`vbird-esi/src/utils/excelExport.ts`、`vbird-esi/tests/template-order-grouping-regression.ts`、`README.md`、`AGENTS.md`、`ONGOING.md`。
+- **结果**：左右切片列独立纵向排版；最终点位段优先与同列前序表块合并，备注只填充该页余高，超高才独立分页。
+- **验证**：亮度检测器打印区域由 `A1:I23 / J1:R7 / J17:R52` 收敛为 `A1:I23 / J1:R36`；阀门右侧由两页合并为 `J1:R34`。回归覆盖两种场景。
+
+### L1 同列连续点位块合页
+- **需求点**：客户反馈亮度检测器中右洞 1-6 与地点 7-18 明明高度足够，却被拆成多个打印页。
+- **路径**：`vbird-esi/src/utils/excelExport.ts`、`vbird-esi/tests/template-order-grouping-regression.ts`、`README.md`、`AGENTS.md`、`ONGOING.md`。
+- **结果**：导出后按 Excel 列汇总连续普通表块，只有总行高不超过 A4 可用高度时才合并 Print Area；最终带备注块保持独立。
+- **验证**：真实亮度检测器的打印区域为 `A1:I23 / J1:R7 / J17:R52`，右洞 1-6、地点 7-18 合并为首页；Excel 识别为 3 页。新增回归固定 `A1:I23`。
+
+### L1 终端备注布局与满 6 点位空表移除
+- **需求点**：客户继续复核指出，备注虽然已改为多行合并，但仍位于右上方并占用后续普通表块的行；同时消火栓及灭火器仅 6 个地点却生成了空汇总表和空备注页。
+- **路径**：`vbird-esi/src/utils/l1PrintLayout.ts`、`vbird-esi/src/utils/excelExport.ts`、`vbird-esi/tests/template-order-grouping-regression.ts`、`README.md`、`AGENTS.md`、`ONGOING.md`。
+- **结果**：最终有效点位段移动到全部普通点位段之后的终端网格槽，备注只影响最后表块。点位数正好为 6 的倍数时不再追加空汇总表；完好率写入最后一个真实结果槽，备注直接附在真实点位表下。
+- **验证**：真实阀门备份的 Excel 打印区域为 `A1:I8 / A10:I17 / A19:I26 / J1:R8 / J10:R17 / J19:R53`，无中间断层；Excel 识别为 6 页。新增回归固定该布局，6 点位样本断言仅输出一个真实打印区域。
+
+### L1 备注多行合并防拉伸
+- **需求点**：客户反馈阀门导出中，右侧备注以单个超高行填充页面，导致左侧与下方表块一起被拉伸。
+- **路径**：`vbird-esi/src/utils/excelExport.ts`、`vbird-esi/tests/template-order-grouping-regression.ts`、`README.md`、`AGENTS.md`、`ONGOING.md`。
+- **结果**：页内备注和独立备注页均按可用高度拆成多个 `20pt` 左右的行，再纵向合并备注标签和内容；最后一行只补齐余量。后续表块按实际合并行数下移，不再共享单个超高行。
+- **验证**：真实阀门备份导出备注合并为 `S8:T35 / U8:AA35`，行高最大值 `36pt`（普通内容行），Excel 识别为 7 个独立打印区域；新增回归断言备注合并跨多行且每个备注行不超过基础高度。
+
+### L1 统一 A4 分页与右侧汇总块修复
+- **需求点**：客户反馈“紧急电话及广播”仍超出 A4 打印区域，且“消火栓及灭火器”第二个表格应在右侧而不是下方；此前分页逻辑反复修改仍存在冲突。
+- **路径**：`vbird-esi/src/utils/l1PrintLayout.ts`、`vbird-esi/src/utils/excelExport.ts`、`vbird-esi/tests/template-order-grouping-regression.ts`、`README.md`、`AGENTS.md`、`ONGOING.md`。
+- **根因**：分页器在全部检查项能放入普通页、但无法连同最终尾部放入时，会返回唯一且 `isLast=false` 的非法分片；同时短表和长表使用两套布局器，最终汇总页被短表布局器强制下移。
+- **结果**：分页器保证始终生成有效最终分片；所有 L1 统一使用软件点位段布局和独立 A4 打印区域，附加汇总块按右侧列块输出。最后有效点位段拆页时每页保留汇总列，完好率与备注仅在末个行页输出。
+- **验证**：真实隧道备份中“紧急电话及广播”由 Excel 识别为 8 个 A4 页，区域高度最大 `725.606pt`，不超过可用高度；“消火栓及灭火器”由 Excel 识别为 2 页，打印区域为 `A1:I12`、`J1:R14`。定向回归、真实工作簿渲染和 Excel 打印页计数均通过。
+
+### L1 长表满页与汇总列归属修复
+- **需求点**：客户要求长检查项目优先填满第一页，允许操作平台等后续检查项在完整行边界进入当前页；并明确汇总列属于最后一个有效点位段，不应只出现在该段拆分后的最后一张物理页。
+- **路径**：`vbird-esi/src/utils/l1PrintLayout.ts`、`vbird-esi/src/utils/excelExport.ts`、`vbird-esi/tests/template-order-grouping-regression.ts`、`README.md`、`AGENTS.md`、`ONGOING.md`。
+- **结果**：纵向分页改为从前向后按可打印高度贪心填充，只有最后页预留故障/完好率/备注尾部；检查项目组可在完整检查项行之间拆页。最后有效点位段的全部纵向页块均输出汇总列和行合格率，设备完好率与备注仍只输出在该段最后一页。
+- **验证**：20 项三组样本断言普通页跨入操作平台组；19 点位长表样本断言最后点位段 AB:AJ 的每个纵向打印区域均含“汇总列”。
+
+### 长检查项目组边界分页
+- **需求点**：客户指出紧急电话及广播同一检查项目组被拆成两页。
+- **路径**：vbird-esi/src/utils/l1PrintLayout.ts、vbird-esi/tests/template-order-grouping-regression.ts。
+- **结果**：纵向分页优先以连续检查项目组为单位；单组自身超页时才按单条检查项目继续拆分。
+- **验证**：三组 20 项样本断言所有普通分页边界均落在不同 groupId 之间。
+
+### 长检查项目左右切片对齐
+- **需求点**：客户要求紧急电话及广播等长检查项目导出必须与软件录入界面的左右切片一致，不能按地点段单列串行下排。
+- **路径**：vbird-esi/src/utils/excelExport.ts、vbird-esi/tests/template-order-grouping-regression.ts。
+- **结果**：长检查项目导出复用录入界面的自动切片坐标；同一行页地点段按横向列块写入，行分页仍在各列块内部独立保留。
+- **验证**：20 项、19 点位样本导出区域为 A:I、J:R、S:AA、AB:AJ 四组左右切片。
+
+### L1 横向页块恢复
+- **需求点**：客户指出上一轮修复后所有 L1 页面变成单列纵向排列，要求恢复原有多页横向展示。
+- **结果**：普通逻辑页恢复横向页块；只有最终备注页下移到新行，既保留横向多表展示，又隔离备注高度。
+- **验证**：60 点位样本实际 XLSX 打印区域为 A1:I31、J1:R31、A33:I55。
+
+### 检查体系结构还原与 L1 分页修正
+- **需求点**：客户要求撤销检查体系结构自定义自动分页，修复 L1 页间备注行高共享造成的空白拉伸，并让合并检查项目的序号连续顺延。
+- **路径**：vbird-esi/src/config/excelLayout.ts、vbird-esi/src/utils/excelExport.ts、vbird-esi/src/utils/l1PrintLayout.ts、vbird-esi/tests/template-order-grouping-regression.ts。
+- **结果**：检查体系结构恢复普通清单布局；L1 普通点位页改为纵向独立打印区域，最后备注只填充其自身页面；L1 序号按检查项目组连续输出。
+- **验证**：30 点位分页样本写入 A1:I23 与 A25:I37 两个连续打印区域；65 项样本验证组序号从 1 起连续递增。
+
+## 2026-07-10
+
+### 检查体系结构还原与 L1 分页修正
+- **需求点**：客户要求撤销检查体系结构自定义自动分页，修复 L1 页间备注行高共享造成的空白拉伸，并让合并检查项目的序号连续顺延。
+- **路径**：vbird-esi/src/config/excelLayout.ts、vbird-esi/src/utils/excelExport.ts、vbird-esi/src/utils/l1PrintLayout.ts、vbird-esi/tests/template-order-grouping-regression.ts。
+- **结果**：检查体系结构恢复普通清单布局；L1 普通点位页改为纵向独立打印区域，最后备注只填充其自身页面；L1 序号按检查项目组连续输出。
+- **验证**：30 点位分页样本验证连续独立打印区域；65 项样本验证组序号从 1 起连续递增。
+
+### 检查体系结构 A4 纵向自动分页
+- **需求点**：客户反馈检查体系结构长表自动分页不符合 A4 纵向页面要求。
+- **路径**：vbird-esi/src/config/excelLayout.ts、vbird-esi/src/utils/excelExport.ts、vbird-esi/tests/template-order-grouping-regression.ts。
+- **结果**：长表不再缩放压页；按实际技术要求和检测方法行高分成独立 A4 纵向打印区域，并在每页重复公司名、标题、表头、分部标题及完整设施名称。
+- **验证**：65 项自备发电设施回归样本断言检查体系结构存在多个 A4 纵向打印区域，并逐页校验重复表头和设施名称。
+
+### 0.2.1 客户测试包
+- **发布版本**：应用前端、Tauri 配置与 Rust 包版本统一调整为 0.2.1，用于本轮客户验收测试。
+- **验证**：npm run tauri build 通过，同时完成 Vue 类型检查、Vite 生产构建和 Rust release 编译；生成 x64 NSIS 与 MSI 安装包。
+
+### L1 长检查项目自动纵向分页
+- **需求点**: 客户要求检查项目较多的长点检表（如 65 项自备发电设施）按完整 A4 页面自动导出。
+- **路径**:
+  - `vbird-esi/src/utils/l1PrintLayout.ts`
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/tests/template-order-grouping-regression.ts`
+- **结果**:
+  - 新增检查项目行级分页；按实际技术要求行高切分，每页重复设施标题和双行表头，单行不会跨页。
+  - 每个点位段仅在最后一个纵向页输出故障行；全表最后页输出设备完好率和备注，长备注仍单独成页。
+  - 保留原有 6 点位满段后的最终汇总块与多打印区域 XML 写入规则。
+- **验证**:
+  - 65 项、6 点位“自备发电设施”回归样本生成 8 个独立打印区域；原始 XLSX 和渲染图确认检查项连续、末页尾部完整。
+
+### 模板顺序、结果组合快照与单对象包
+- **需求点**: 客户确认 L2/L3 关联顺序、L1 模板级结果组合、L1 页内备注高度和项目/L1/L2/L3 单对象导入导出方案。
+- **路径**:
+  - `vbird-esi/src/types/template.ts`
+  - `vbird-esi/src/utils/projectOrder.ts`
+  - `vbird-esi/src/utils/projectStructure.ts`
+  - `vbird-esi/src/utils/projectCalc.ts`
+  - `vbird-esi/src/utils/l1PrintLayout.ts`
+  - `vbird-esi/src/utils/excelExport.ts`
+  - `vbird-esi/src/utils/objectPackage.ts`
+  - `vbird-esi/src/views/TemplateManager/*.vue`
+  - `vbird-esi/src/views/ProjectManager/ProjectManager.vue`
+  - `vbird-esi/src/views/ProjectEditor/ProjectEditor.vue`
+- **结果**:
+  - L2 内 L1、L3 内 L2 可手动排序；模板数组作为唯一顺序来源，项目与 Excel 输出连续重编号。
+  - 结果组合名/权值移至 L1 模板，项目创建或新增时保存快照；同组合 L1 独立录入和导出，清单与汇总按组合展示、加权。
+  - L1 页内表块间隔固定，剩余高度只补最底部有效备注区。
+  - 项目/L1/L2/L3 单对象包携带依赖，导入校验闭包并重映射冲突 ID；全量备份整体替换行为保持不变。
+- **验证**:
+  - 新增 `tests/template-order-grouping-regression.ts`，覆盖排序、组合、分页、对象包冲突与非法包。
+  - `npx vue-tsc --noEmit`、`npm run build`、SSR Excel 定向回归通过。
+
 ## 2026-07-09
 
 ### 调试生成物清理

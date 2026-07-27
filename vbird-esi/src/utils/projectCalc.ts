@@ -1,6 +1,7 @@
 import type { DeviceItem, Project, ProjectSubdivision, InspectionTableData } from '@/types'
-import type { GradeThreshold, L1Template, L2Template } from '@/types/template'
+import type { GradeThreshold, L1Template, L2Template, L3Template } from '@/types/template'
 import { isEffectiveValue } from '@/utils/numericRule'
+import { getOrderedL1Ids, getOrderedProjectSubdivisions } from '@/utils/projectOrder'
 
 export interface ProjectCalcL1Row {
   l1Id: string
@@ -42,6 +43,8 @@ export interface ProjectCalcPreview {
 
 export interface ProjectCalcOptions {
   getSubdivisionWeight?: (sub: ProjectSubdivision) => unknown
+  l2Templates?: L2Template[]
+  l3Template?: L3Template | null
 }
 
 export interface ResultListRow {
@@ -94,8 +97,12 @@ export function countFaultStats(data: InspectionTableData, cpIndices: number[]):
   return { totalCount, faultCount }
 }
 
-export function calcSubdivisionScore(sub: ProjectSubdivision, l1Templates: L1Template[]): number | null {
-  const rows = buildSubdivisionL1Rows(sub, l1Templates)
+export function calcSubdivisionScore(
+  sub: ProjectSubdivision,
+  l1Templates: L1Template[],
+  l2Template?: L2Template,
+): number | null {
+  const rows = buildSubdivisionL1Rows(sub, l1Templates, l2Template)
   return calcWeightedCriticalScore(rows)
 }
 
@@ -108,11 +115,13 @@ export function buildProjectCalcPreview(
   let projectFaultCount = 0
   const projectRows: ProjectCalcL1Row[] = []
 
-  const subdivisions = project.subdivisions.map(sub => {
-    const l1Rows = buildSubdivisionL1Rows(sub, l1Templates)
+  const subdivisions = getOrderedProjectSubdivisions(project, options.l3Template).map(sub => {
+    const l2Template = options.l2Templates?.find(template => template.id === sub.l2TemplateId)
+    const l1Rows = buildSubdivisionL1Rows(sub, l1Templates, l2Template)
     const subTotalCount = l1Rows.reduce((sum, row) => sum + row.totalCount, 0)
     const subFaultCount = l1Rows.reduce((sum, row) => sum + row.faultCount, 0)
-    const passRateValue = subTotalCount > 0 ? (1 - subFaultCount / subTotalCount) * 100 : null
+    // 关键设备为全分部最低值时取其完好率，否则按总量/故障数计算整体完好率。
+    const passRateValue = calcWeightedCriticalScore(l1Rows)
     const summaryWeight = normalizeWeight(options.getSubdivisionWeight?.(sub) ?? sub.summaryWeight)
 
     projectTotalCount += subTotalCount
@@ -131,7 +140,7 @@ export function buildProjectCalcPreview(
       finalScoreDisplay: finalScore !== null ? finalScore.toFixed(2) : '/',
       totalCount: subTotalCount,
       faultCount: subFaultCount,
-      passRate: calcRateFromCounts(subTotalCount, subFaultCount),
+      passRate: formatPercentValue(passRateValue),
       passRateValue,
       l1Rows,
     }
@@ -161,13 +170,15 @@ export function buildResultListRowsWithGrades(
   project: Project,
   l1Templates: L1Template[],
   l2Templates: L2Template[] = [],
+  l3Template?: L3Template | null,
 ): ResultListRow[] {
   const rows: ResultListRow[] = []
-  for (const sub of project.subdivisions) {
-    const l2Template = l2Templates.find(t => t.id === sub.l2TemplateId)
-    for (const row of buildSubdivisionL1Rows(sub, l1Templates)) {
+  const preview = buildProjectCalcPreview(project, l1Templates, { l2Templates, l3Template })
+  for (const sub of preview.subdivisions) {
+    const l2Template = l2Templates.find(template => template.id === sub.l2TemplateId)
+    for (const row of sub.l1Rows) {
       rows.push({
-        subdivisionName: sub.l2TemplateName,
+        subdivisionName: sub.name,
         l1Name: row.name,
         totalCount: row.totalCount,
         faultCount: row.faultCount,
@@ -200,13 +211,16 @@ export function buildDeviceListRows(
   project: Project,
   l1Templates: L1Template[],
   deviceItems: DeviceItem[],
+  l2Templates: L2Template[] = [],
+  l3Template?: L3Template | null,
 ): DeviceListRow[] {
   const deviceMap = new Map(deviceItems.map(item => [item.id, item]))
   const used = new Set<string>()
   const rows: DeviceListRow[] = []
 
-  for (const sub of project.subdivisions) {
-    for (const l1Id of sub.selectedL1Ids) {
+  for (const sub of getOrderedProjectSubdivisions(project, l3Template)) {
+    const l2Template = l2Templates.find(template => template.id === sub.l2TemplateId)
+    for (const l1Id of getOrderedL1Ids(sub, l2Template)) {
       const template = l1Templates.find(t => t.id === l1Id)
       const data = sub.inspectionData[l1Id]
       if (!template || !data) continue
@@ -231,8 +245,12 @@ export function buildDeviceListRows(
   return rows
 }
 
-export function buildSubdivisionL1Rows(sub: ProjectSubdivision, l1Templates: L1Template[]): ProjectCalcL1Row[] {
-  const baseRows = sub.selectedL1Ids.map(l1Id => {
+export function buildSubdivisionL1Rows(
+  sub: ProjectSubdivision,
+  l1Templates: L1Template[],
+  l2Template?: L2Template,
+): ProjectCalcL1Row[] {
+  const baseRows = getOrderedL1Ids(sub, l2Template).map(l1Id => {
     const l1Tpl = l1Templates.find(t => t.id === l1Id)
     const l1Data = sub.inspectionData[l1Id]
     const isCritical = l1Tpl?.isCritical ?? false
@@ -286,6 +304,7 @@ export function buildSubdivisionL1Rows(sub: ProjectSubdivision, l1Templates: L1T
   return [...groups.entries()].map(([key, rows]) => {
     if (rows.length === 1 && key.startsWith('single:')) return rows[0]
     const groupName = key.replace(/^group:/, '')
+    const isCritical = rows.every(row => row.isCritical)
     const totalCount = rows.reduce((sum, row) => sum + row.totalCount, 0)
     const faultCount = rows.reduce((sum, row) => sum + row.faultCount, 0)
     const itemCount = rows.reduce((sum, row) => sum + row.itemCount, 0)
@@ -296,8 +315,8 @@ export function buildSubdivisionL1Rows(sub: ProjectSubdivision, l1Templates: L1T
       : null
     return {
       l1Id: key,
-      name: groupName || rows.map(row => row.name).join(' + '),
-      isCritical: rows.some(row => row.isCritical),
+      name: getDisplayL1Name(groupName || rows.map(row => row.name).join(' + '), isCritical),
+      isCritical,
       itemCount,
       sourceL1Ids: rows.flatMap(row => row.sourceL1Ids),
       resultWeight: weightTotal || 1,

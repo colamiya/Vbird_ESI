@@ -32,6 +32,8 @@ const formData = ref({
   name: '',
   facilityName: '',
   isCritical: false,
+  resultGroupName: '',
+  resultWeight: 1,
   autoCutEnabled: true,
 })
 
@@ -50,12 +52,14 @@ watch(() => props.visible, (val) => {
         name: props.template.name,
         facilityName: props.template.facilityName,
         isCritical: props.template.isCritical ?? false,
+        resultGroupName: props.template.resultGroupName ?? '',
+        resultWeight: props.template.resultWeight ?? 1,
         autoCutEnabled: props.template.autoCutEnabled ?? true,
       }
       inspectionItems.value = JSON.parse(JSON.stringify(props.template.inspectionItems))
     } else {
       // 新建模式：重置
-      formData.value = { name: '', facilityName: '', isCritical: false, autoCutEnabled: true }
+      formData.value = { name: '', facilityName: '', isCritical: false, resultGroupName: '', resultWeight: 1, autoCutEnabled: true }
       inspectionItems.value = []
     }
   }
@@ -151,11 +155,14 @@ function handleSave() {
   })
 
   const now = nowISO()
+  const resultWeightValue = Number(formData.value.resultWeight)
   const template: L1Template = {
     id: props.template?.id ?? generateId(),
     name: formData.value.name.trim(),
     facilityName: formData.value.facilityName.trim(),
     isCritical: formData.value.isCritical,
+    resultGroupName: formData.value.resultGroupName.trim() || undefined,
+    resultWeight: Number.isFinite(resultWeightValue) ? Math.max(0, resultWeightValue) : 1,
     createdAt: props.template?.createdAt ?? now,
     updatedAt: now,
     columns: {
@@ -273,6 +280,14 @@ function onTypeChange(item: InspectionItem) {
         <div class="form-field">
           <label>重点设备</label>
           <el-switch v-model="formData.isCritical" active-text="是" inactive-text="否" />
+        </div>
+        <div class="form-field">
+          <label>结果组合名称</label>
+          <el-input v-model="formData.resultGroupName" placeholder="留空则独立计算" />
+        </div>
+        <div class="form-field">
+          <label>组合权值</label>
+          <el-input-number v-model="formData.resultWeight" :min="0" :step="0.1" controls-position="right" style="width: 100%" />
         </div>
         <div class="form-field">
           <label>自动切割 (A4)</label>

@@ -5,6 +5,7 @@
  */
 import { ref, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
+import { ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import type { L3Template } from '@/types'
 import { generateId, nowISO } from '@/utils/id'
 import { useTemplateStore } from '@/stores/templateStore'
@@ -110,6 +111,14 @@ function setL2Weight(l2TemplateId: string, val: number | undefined) {
   l2Weights.value[l2TemplateId] = normalizeSubdivisionWeight(val)
 }
 
+function moveL2(index: number, direction: -1 | 1) {
+  const target = index + direction
+  if (target < 0 || target >= selectedL2Ids.value.length) return
+  const ids = [...selectedL2Ids.value]
+  ;[ids[index], ids[target]] = [ids[target], ids[index]]
+  selectedL2Ids.value = ids
+}
+
 function handleSave() {
   if (!formData.value.name.trim()) {
     ElMessage.warning('请输入模板名称')
@@ -190,6 +199,15 @@ function handleSave() {
         filterable
         filter-placeholder="搜索模板"
       />
+      <div v-if="selectedL2WeightRows.length" class="order-panel">
+        <div class="order-title">导出与项目展示顺序</div>
+        <div v-for="(row, index) in selectedL2WeightRows" :key="row.id" class="order-row">
+          <span class="order-index">{{ index + 1 }}</span>
+          <span class="order-name">{{ row.name }}</span>
+          <el-tooltip content="上移" placement="top"><el-button :icon="ArrowUp" circle text size="small" :disabled="index === 0" @click="moveL2(index, -1)" /></el-tooltip>
+          <el-tooltip content="下移" placement="top"><el-button :icon="ArrowDown" circle text size="small" :disabled="index === selectedL2WeightRows.length - 1" @click="moveL2(index, 1)" /></el-tooltip>
+        </div>
+      </div>
       <div v-if="selectedL2WeightRows.length" class="weight-panel">
         <div class="weight-title">分部权值</div>
         <el-table :data="selectedL2WeightRows" border size="small">
@@ -230,4 +248,9 @@ function handleSave() {
 .weight-panel { margin-top: var(--space-md); }
 .weight-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-xs); }
 .required { color: var(--color-danger); }
+.order-panel { margin-top: var(--space-md); border-top: 1px solid var(--border-color-light); padding-top: var(--space-sm); }
+.order-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-xs); }
+.order-row { display: flex; align-items: center; gap: var(--space-xs); min-height: 32px; }
+.order-index { width: 24px; text-align: center; color: var(--text-tertiary); font-size: 12px; }
+.order-name { flex: 1; min-width: 0; color: var(--text-primary); font-size: 13px; }
 </style>
