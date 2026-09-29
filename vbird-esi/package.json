@@ -20,7 +20,7 @@
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
     "@tauri-apps/plugin-opener": "^2",
-    "element-plus": "^2.13.6",
+    "element-plus": "^2.14.6",
     "exceljs": "^4.4.0",
     "jszip": "^3.10.1",
     "pinia": "^3.0.4",
