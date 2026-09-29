@@ -526,3 +526,13 @@ interface Checkpoint {
 - `点检表结构.png` — L1 点检表色标结构图
 - `分部表结构.png` — L2 分部表色标结构图
 - `docx_images/image4.png` — 穿梭框交互参考图
+
+## 安全与隐私
+
+- 项目数据保存在本机；导入完整备份前会先校验实体标识、引用关系和数据结构，失败时不会替换现有数据。
+- 不要向仓库提交真实检查记录、个人信息、密码、令牌、临时 Office 锁文件或带作者信息的文档。
+- 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
+
+## 许可证
+
+项目代码采用 [MIT License](LICENSE)。依赖与参考资料的许可边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

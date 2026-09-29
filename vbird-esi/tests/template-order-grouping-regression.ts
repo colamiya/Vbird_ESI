@@ -5,8 +5,10 @@ import { buildProjectCalcPreview } from '@/utils/projectCalc'
 import { buildProjectWorkbook, writeWorkbookBuffer } from '@/utils/excelExport'
 import { buildL1ExportPrintPages, buildL1VerticalRowSlices, getUsablePageHeightPt, L1_PRINT_LAYOUT } from '@/utils/l1PrintLayout'
 import { createObjectPackage, prepareObjectPackageImport } from '@/utils/objectPackage'
+import { prepareFullBackupPackage } from '@/utils/backup'
 import { createInspectionData, syncInspectionDataToLocationItem } from '@/utils/projectStructure'
 import { getOrderedProjectSubdivisions } from '@/utils/projectOrder'
+import { assertSafeEntityId } from '@/utils/storage'
 
 const now = '2026-07-10T00:00:00.000Z'
 const regressionOutputDir = '.tmp-regression'
@@ -581,6 +583,27 @@ assert.throws(() => prepareObjectPackageImport({
   ...objectPackage,
   data: { ...objectPackage.data, l1Templates: [] },
 }, 'project', catalog))
+
+for (const safeId of ['l1-a', 'project-1', '550e8400-e29b-41d4-a716-446655440000']) {
+  assert.doesNotThrow(() => assertSafeEntityId(safeId))
+}
+for (const unsafeId of ['', '.', '..', '../escape', '..\\escape', 'a/b', 'a\\b', 'a:b', 'name.', 'CON', `nul\0id`]) {
+  assert.throws(() => assertSafeEntityId(unsafeId))
+}
+
+const fullBackup = {
+  app: 'vbird-esi', backupVersion: 1, exportedAt: now,
+  data: { ...catalog, deviceItems: [] },
+}
+assert.doesNotThrow(() => prepareFullBackupPackage(fullBackup))
+assert.throws(() => prepareFullBackupPackage({
+  ...fullBackup,
+  data: { ...fullBackup.data, l1Templates: { invalid: true } },
+}))
+assert.throws(() => prepareFullBackupPackage({
+  ...fullBackup,
+  data: { ...fullBackup.data, projects: [{ ...project, id: '../escape' }] },
+}))
 
 void Promise.all([workbookWrite, longWorkbookWrite, wideWorkbookWrite, communicationWorkbookWrite])
   .then(() => console.log('template-order-grouping-regression: PASS'))

@@ -15,6 +15,35 @@ export const STORAGE_DIRS = {
   PROJECTS: 'projects',
 } as const
 
+const STORAGE_DIR_SET = new Set<string>(Object.values(STORAGE_DIRS))
+
+/**
+ * 验证会进入文件名的业务实体 ID。
+ *
+ * 兼容历史数据中的短横线 ID，但拒绝任何可改变路径结构的字符。
+ */
+export function assertSafeEntityId(id: unknown): asserts id is string {
+  if (typeof id !== 'string' || id.length === 0 || id.length > 128) {
+    throw new Error('实体 ID 格式不正确')
+  }
+  const reservedWindowsName = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(id)
+  if (
+    id === '.'
+    || id === '..'
+    || /[\\/<>:"|?*\u0000-\u001f\u007f]/.test(id)
+    || /[. ]$/.test(id)
+    || reservedWindowsName
+  ) {
+    throw new Error(`实体 ID 包含非法路径字符：${JSON.stringify(id)}`)
+  }
+}
+
+function assertStorageDir(subDir: string): void {
+  if (!STORAGE_DIR_SET.has(subDir)) {
+    throw new Error(`不允许的存储目录：${subDir}`)
+  }
+}
+
 /** 数据根目录 Promise 缓存（防止并发调用发出多次 invoke，RISK-2 修复） */
 let _dataRootPromise: Promise<string> | null = null
 
@@ -28,6 +57,7 @@ export async function getDataRoot(): Promise<string> {
 
 /** 拼接完整文件路径（纯字符串拼接，不依赖前端 path API） */
 export async function getFilePath(subDir: string, fileName: string): Promise<string> {
+  assertStorageDir(subDir)
   const root = await getDataRoot()
   // 使用 / 拼接路径，Rust std::fs 在 Windows 上也支持正斜杠
   return `${root}/${subDir}/${fileName}`
@@ -50,6 +80,7 @@ export async function deleteFile(path: string): Promise<void> {
 
 /** 列出目录下所有 JSON 文件路径 */
 export async function listJsonFiles(subDir: string): Promise<string[]> {
+  assertStorageDir(subDir)
   const root = await getDataRoot()
   const dir = `${root}/${subDir}`
   return await invoke('list_json_files', { dir })
@@ -65,6 +96,7 @@ export async function saveData<T extends { id: string }>(
   subDir: string,
   data: T,
 ): Promise<void> {
+  assertSafeEntityId(data.id)
   const path = await getFilePath(subDir, `${data.id}.json`)
   await writeJsonFile(path, data)
 }
@@ -84,8 +116,22 @@ export async function loadAllData<T>(subDir: string): Promise<T[]> {
   return data
 }
 
+/** 严格加载全部 JSON；任一文件不可读时整体失败，供备份/替换事务使用。 */
+export async function loadAllDataStrict<T>(subDir: string): Promise<T[]> {
+  const files = await listJsonFiles(subDir)
+  const results = await Promise.allSettled(files.map(file => readJsonFile<T>(file)))
+  const failures = results
+    .map((result, index) => ({ result, file: files[index] }))
+    .filter(item => item.result.status === 'rejected')
+  if (failures.length > 0) {
+    throw new Error('无法完整读取 ' + subDir + '：' + failures.map(item => item.file).join('、'))
+  }
+  return results.map(result => (result as PromiseFulfilledResult<T>).value)
+}
+
 /** 删除指定子目录下的数据 */
 export async function deleteData(subDir: string, id: string): Promise<void> {
+  assertSafeEntityId(id)
   const path = await getFilePath(subDir, `${id}.json`)
   await deleteFile(path)
 }
@@ -93,5 +139,12 @@ export async function deleteData(subDir: string, id: string): Promise<void> {
 /** 删除指定业务目录下全部 JSON 数据 */
 export async function clearDataDir(subDir: string): Promise<void> {
   const files = await listJsonFiles(subDir)
-  await Promise.all(files.map(file => deleteFile(file)))
+  const results = await Promise.allSettled(files.map(file => deleteFile(file)))
+  const failedFiles = results
+    .map((result, index) => ({ result, file: files[index] }))
+    .filter(item => item.result.status === 'rejected')
+    .map(item => item.file)
+  if (failedFiles.length > 0) {
+    throw new Error('无法完整清空 ' + subDir + '：' + failedFiles.join('、'))
+  }
 }

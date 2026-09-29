@@ -1,7 +1,7 @@
 import { open, save } from '@tauri-apps/plugin-dialog'
 import type { DeviceItem, L1Template, L2Template, L3Template, Project } from '@/types'
 import { generateId } from '@/utils/id'
-import { deleteData, readJsonFile, saveData, STORAGE_DIRS, writeJsonFile } from '@/utils/storage'
+import { assertSafeEntityId, deleteData, readJsonFile, saveData, STORAGE_DIRS, writeJsonFile } from '@/utils/storage'
 import { ensureProjectLocationItems } from '@/utils/projectStructure'
 
 export type ObjectPackageRootType = 'project' | 'l1' | 'l2' | 'l3'
@@ -153,7 +153,12 @@ function validateObjectPackage(rawPackage: unknown, expectedRootType: ObjectPack
   const data = pkg.data as Partial<ObjectPackage['data']>
   for (const key of ['l1Templates', 'l2Templates', 'l3Templates', 'deviceItems', 'projects'] as const) {
     if (!Array.isArray(data[key])) throw new Error(`对象包字段 ${key} 格式不正确`)
+    for (const [index, entry] of data[key].entries()) {
+      if (!entry || typeof entry !== 'object') throw new Error(`对象包字段 ${key}[${index}] 格式不正确`)
+      assertSafeEntityId(entry.id)
+    }
   }
+  assertSafeEntityId(data.rootId)
   const normalized = pkg as ObjectPackage
   if (!getRoot(normalized.data, expectedRootType, normalized.data.rootId)) throw new Error('对象包根对象不存在')
   return normalized

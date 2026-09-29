@@ -14,6 +14,7 @@ dist-ssr
 
 # Generated verification/debug artifacts
 vbird-esi/outputs/
+vbird-esi/.tmp-full-flow-qa/
 docs/superpowers/
 vbird-esi/scripts/
 ~$*.xlsx

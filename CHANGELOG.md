@@ -2,6 +2,15 @@
 
 > 追加式修改日志。只允许在顶部新增，不允许覆盖或删除历史。
 
+## 2026-09-29
+
+### 公开仓库安全与合规基线
+- **路径**：`vbird-esi/src/utils/storage.ts`、`backup.ts`、`objectPackage.ts`、回归测试和仓库治理文档。
+- **结果**：文件型实体 ID 增加路径安全校验；全量导入改为先完整验证、再替换，并在写入失败时尝试恢复原数据；对象包也复用同一 ID 边界。
+- **治理**：补充 MIT License、私密漏洞报告指引、代码所有者、Dependabot 与第三方依赖说明；移除 Office 锁文件和生成的 QA 产物。
+- **依赖**：前端依赖与 Tauri/Rust 锁定依赖已刷新，覆盖当前 Dependabot 可自动修复项。
+- **验证**：`npm audit` 无已知漏洞；`npm run build`、`npx tsx tests/template-order-grouping-regression.ts`、`cargo check --locked` 与 `cargo test --locked` 通过。
+
 ## 2026-07-12
 
 ### 全流程模拟验收
