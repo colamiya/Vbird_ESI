@@ -8,7 +8,7 @@
 
 - 全量备份导入已增加结构、实体 ID、重复 ID 与跨实体引用预检；只有完整验证通过后才清空现有数据，写入失败时以导入前内存快照回滚。
 - 存储层和单对象包拒绝路径分隔符、控制字符及 `.` / `..` 等危险 ID。
-- 公开仓库已补充 MIT License、SECURITY、CODEOWNERS、Dependabot 与第三方依赖说明；Office 临时锁文件和生成的 QA 产物不再跟踪。
+- 公开仓库已补充 MIT License、SECURITY、CODEOWNERS 与第三方依赖说明，并启用 Dependabot 安全更新；Office 临时锁文件和生成的 QA 产物不再跟踪。
 - 本机验证已通过 TypeScript/Vue 生产构建、定向回归、Rust 编译与单测；前端依赖审计无已知漏洞，Rust 依赖已刷新并等待 GitHub 在推送后重新评估告警。
 
 ## 2026-07-10 实施完成与验证
